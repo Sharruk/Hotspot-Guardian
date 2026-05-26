@@ -116,10 +116,13 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           if (-not $version) { $version = "0.0.0-dev" }
+          # NOTE: NSIS resolves relative File/OutFile paths against the
+          # directory of the .nsi script, NOT the current working dir.
+          # The script lives in build/, so paths here are relative to build/.
           $script = @"
           !define APP_NAME "LanLink"
           !define APP_VERSION "$version"
-          OutFile "build\lanlink-windows-setup.exe"
+          OutFile "lanlink-windows-setup.exe"
           InstallDir "`$PROGRAMFILES64\LanLink"
           RequestExecutionLevel admin
           Page directory
@@ -128,7 +131,7 @@ jobs:
           UninstPage instfiles
           Section "Install"
             SetOutPath "`$INSTDIR"
-            File /r "build\installer\*.*"
+            File /r "installer\*.*"
             CreateDirectory "`$SMPROGRAMS\LanLink"
             CreateShortCut  "`$SMPROGRAMS\LanLink\LanLink.lnk"  "`$INSTDIR\lanlink.exe"
             CreateShortCut  "`$DESKTOP\LanLink.lnk"             "`$INSTDIR\lanlink.exe"
