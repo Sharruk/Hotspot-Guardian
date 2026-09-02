@@ -61,7 +61,22 @@ Future<void> showSavedLocationDialog(
   return showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Where your files are'),
+      title: Row(
+        children: [
+          Icon(
+            isMessage ? Icons.chat_bubble_outline : Icons.folder_outlined,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              isMessage
+                  ? 'Message from ${session.peer.alias}'
+                  : 'Where your files are',
+            ),
+          ),
+        ],
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,

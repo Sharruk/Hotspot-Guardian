@@ -10,6 +10,7 @@ import '../../core/protocol/constants.dart';
 import '../../core/settings/app_settings.dart';
 import '../../core/util/eta.dart';
 import '../../core/util/format.dart';
+import '../../core/util/text_payload.dart';
 import '../v4/v4.dart' as v4;
 
 /// Maps an engine [TransferStatus] to the v4 display status.
@@ -40,8 +41,10 @@ v4.SessionCardData sessionCardData(TransferSession session,
     {String? peerName}) {
   final files = session.files.values.toList();
   final status = displayStatus(session);
-  final title =
-      files.length == 1 ? files.first.file.fileName : '${files.length} files';
+  final isMessage = files.length == 1 && isMessageSnippet(files.first.file);
+  final title = isMessage
+      ? 'Text Message'
+      : (files.length == 1 ? files.first.file.fileName : '${files.length} files');
   final transferring = status == v4.SessionStatus.transferring;
   final speed = session.speedBytesPerSec;
   String? errorHint;

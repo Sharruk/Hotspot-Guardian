@@ -1,10 +1,8 @@
 import 'package:flutter/foundation.dart';
 
-/// A tiny in-memory ring buffer of recent app events, used to power the
-/// "Copy diagnostics" button in Settings. Nothing here is persisted or sent
-/// anywhere — it only exists so a user reporting a problem can paste a short
-/// log into a message instead of describing it from memory.
-class EventLog {
+/// A lightweight in-memory ring buffer of recent network and system events,
+/// used to power the live Hotspot Guardian Event Log.
+class EventLog extends ChangeNotifier {
   EventLog._();
 
   static final EventLog instance = EventLog._();
@@ -15,11 +13,16 @@ class EventLog {
 
   List<EventLogEntry> get entries => List.unmodifiable(_entries);
 
-  /// Append a line. Oldest entries roll off once [maxEntries] is reached.
-  void add(String message, {EventLevel level = EventLevel.info}) {
+  /// Append an event line. Oldest entries roll off once [maxEntries] is reached.
+  void add(
+    String message, {
+    EventLevel level = EventLevel.info,
+    String category = 'SYSTEM',
+  }) {
     final entry = EventLogEntry(
       time: DateTime.now(),
       level: level,
+      category: category,
       message: message,
     );
     _entries.add(entry);
@@ -27,11 +30,15 @@ class EventLog {
       _entries.removeRange(0, _entries.length - maxEntries);
     }
     if (kDebugMode) {
-      debugPrint('[event:${level.name}] $message');
+      debugPrint('[$category:${level.name}] $message');
     }
+    notifyListeners();
   }
 
-  void clear() => _entries.clear();
+  void clear() {
+    _entries.clear();
+    notifyListeners();
+  }
 
   /// Render the buffer as a single clipboard-friendly string, oldest first.
   String export({String? header}) {
@@ -54,14 +61,18 @@ class EventLogEntry {
     required this.time,
     required this.level,
     required this.message,
+    this.category = 'SYSTEM',
   });
 
   final DateTime time;
   final EventLevel level;
+  final String category;
   final String message;
 
   String format() {
-    final t = time.toIso8601String();
-    return '$t  ${level.name.toUpperCase().padRight(5)}  $message';
+    final two = (int n) => n.toString().padLeft(2, '0');
+    final t = '${two(time.hour)}:${two(time.minute)}:${two(time.second)}';
+    return '$t  ${category.padRight(11)}  ${level.name.toUpperCase().padRight(5)}  $message';
   }
 }
+

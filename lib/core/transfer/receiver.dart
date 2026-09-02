@@ -17,7 +17,9 @@ import '../models/file_info.dart';
 import '../models/session.dart';
 import '../protocol/constants.dart';
 import '../security/device_certificate.dart';
+import '../util/event_log.dart';
 import '../util/safe_paths.dart';
+import '../web/web_portal.dart';
 
 /// Outcome the UI returns when asked to approve an incoming transfer.
 class AcceptDecision {
@@ -133,6 +135,11 @@ class Receiver {
     if (_httpServer != null) return;
 
     final router = Router()
+      ..get('/', _handleWebIndex)
+      ..get('/index.html', _handleWebIndex)
+      ..get('/api/hotspot/status', _handleWebStatus)
+      ..post('/api/hotspot/message', _handleWebMessage)
+      ..post('/api/hotspot/upload', _handleWebUpload)
       ..get(LanLinkProtocol.routeInfo, _handleInfo)
       ..head(LanLinkProtocol.routeInfo, _handleInfo)
       ..post(LanLinkProtocol.routeRegister, _handleRegister)
@@ -266,6 +273,187 @@ class Receiver {
       };
 
   // ---- Handlers ----
+
+  Response _handleWebIndex(Request req) {
+    final me = localDeviceProvider();
+    final connInfo =
+        req.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+    final clientIp = connInfo?.remoteAddress.address ?? 'Client';
+    EventLog.instance.add('Web client connected ($clientIp)', category: 'NETWORK');
+    final html = WebPortal.buildHtml(
+      hostAlias: me.alias,
+      serverIp: me.ip.isNotEmpty ? me.ip : '127.0.0.1',
+      serverPort: me.port,
+      protocolVersion: LanLinkProtocol.protocolVersion,
+    );
+    return Response.ok(
+      html,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      },
+    );
+  }
+
+  Response _handleWebStatus(Request req) {
+    final me = localDeviceProvider();
+    return Response.ok(
+      json.encode({
+        'status': 'connected',
+        'alias': me.alias,
+        'ip': me.ip,
+        'port': me.port,
+        'version': LanLinkProtocol.protocolVersion,
+        'timestamp': DateTime.now().toIso8601String(),
+      }),
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      },
+    );
+  }
+
+  Future<Response> _handleWebMessage(Request req) async {
+    final connInfo =
+        req.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+    final clientIp = connInfo?.remoteAddress.address ?? 'Web Client';
+
+    final raw = await _readBoundedControlBody(req, _maxDeviceInfoBodyBytes);
+    String message = '';
+    try {
+      final decoded = json.decode(raw);
+      if (decoded is Map<String, dynamic> && decoded['message'] != null) {
+        message = decoded['message'].toString().trim();
+      } else {
+        message = raw.trim();
+      }
+    } catch (_) {
+      message = raw.trim();
+    }
+
+    if (message.isEmpty) {
+      return Response.badRequest(
+        body: json.encode({'success': false, 'error': 'Message cannot be empty'}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    }
+
+    // 1. Log to Hotspot Guardian Event Log
+    EventLog.instance.add('Browser message from $clientIp: "$message"', category: 'MESSAGE');
+
+    // 2. Persist message to safe storage directory
+    try {
+      final saveDir = await saveDirProvider();
+      await saveDir.create(recursive: true);
+      final now = DateTime.now();
+      String two(int v) => v.toString().padLeft(2, '0');
+      final stamp = '${now.year}-${two(now.month)}-${two(now.day)} '
+          '${two(now.hour)}.${two(now.minute)}.${two(now.second)}';
+      final file = File(p.join(saveDir.path, 'Message $stamp.txt'));
+      await file.writeAsString(message, flush: true);
+      EventLog.instance.add('Message saved to storage (Message $stamp.txt)', category: 'MESSAGE');
+    } catch (e) {
+      if (kDebugMode) debugPrint('[receiver] Failed to persist message: $e');
+    }
+
+    return Response.ok(
+      json.encode({
+        'success': true,
+        'message': 'Message received successfully',
+        'client': clientIp,
+        'timestamp': DateTime.now().toIso8601String(),
+      }),
+      headers: {'Content-Type': 'application/json; charset=utf-8'},
+    );
+  }
+
+  Future<Response> _handleWebUpload(Request req) async {
+    final connInfo =
+        req.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+    final clientIp = connInfo?.remoteAddress.address ?? 'Web Client';
+
+    // Parse requested filename from query parameter or header, with fallback
+    final rawName = req.url.queryParameters['filename'] ??
+        req.headers['x-filename'] ??
+        'web_upload_${DateTime.now().millisecondsSinceEpoch}.bin';
+    final safeSegments = splitSafeRelativePath(rawName);
+    final safeName = safeSegments.last;
+
+    final Directory saveDir;
+    try {
+      saveDir = await saveDirProvider();
+      await saveDir.create(recursive: true);
+    } catch (e) {
+      EventLog.instance.add('Upload failed: cannot create save directory',
+          category: 'TRANSFER', level: EventLevel.error);
+      return Response.internalServerError(
+        body: json.encode({'success': false, 'error': 'Cannot create save directory'}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    }
+
+    final outPath = await uniqueOutputPath(saveDir, safeName);
+    final targetFile = File(outPath);
+    final startTime = DateTime.now();
+
+    EventLog.instance.add('Browser upload started from $clientIp: $safeName',
+        category: 'TRANSFER');
+
+    IOSink? sink;
+    int receivedBytes = 0;
+    try {
+      sink = targetFile.openWrite();
+      int unflushed = 0;
+      await for (final chunk in req.read()) {
+        sink.add(chunk);
+        receivedBytes += chunk.length;
+        unflushed += chunk.length;
+        if (unflushed >= _flushEveryBytes) {
+          unflushed = 0;
+          await sink.flush();
+        }
+      }
+      await sink.flush();
+      await sink.close();
+      _releaseReservedPath(outPath);
+    } catch (e) {
+      try {
+        await sink?.close();
+      } catch (_) {}
+      _releaseReservedPath(outPath);
+      EventLog.instance.add('Browser upload failed: $e',
+          category: 'TRANSFER', level: EventLevel.error);
+      return Response.internalServerError(
+        body: json.encode({'success': false, 'error': 'Upload streaming failed: $e'}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    }
+
+    final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
+    final elapsedSec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
+    final speedBytesPerSec = receivedBytes / elapsedSec;
+    final speedStr = speedBytesPerSec >= 1024 * 1024
+        ? '${(speedBytesPerSec / (1024 * 1024)).toStringAsFixed(2)} MB/s'
+        : '${(speedBytesPerSec / 1024).toStringAsFixed(2)} KB/s';
+
+    EventLog.instance.add(
+      'Browser upload completed: $safeName ($receivedBytes bytes in ${elapsedSec.toStringAsFixed(2)}s, $speedStr)',
+      category: 'TRANSFER',
+    );
+
+    return Response.ok(
+      json.encode({
+        'success': true,
+        'message': 'Upload completed successfully',
+        'fileName': safeName,
+        'bytes': receivedBytes,
+        'durationMs': elapsedMs,
+        'speed': speedStr,
+        'savedPath': outPath,
+      }),
+      headers: {'Content-Type': 'application/json; charset=utf-8'},
+    );
+  }
 
   Response _handleInfo(Request req) {
     final me = localDeviceProvider();

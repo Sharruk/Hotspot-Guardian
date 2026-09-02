@@ -24,6 +24,7 @@ import '../core/transfer/sender.dart';
 import '../core/util/event_log.dart';
 import '../core/util/fingerprint.dart';
 import '../core/util/network.dart';
+import '../core/util/text_payload.dart';
 
 /// Signature for the UI hook that asks the user whether to accept an
 /// incoming transfer. The UI is expected to show a modal and return when
@@ -81,6 +82,17 @@ class AppState extends ChangeNotifier {
   bool get isScanning => _scanning;
 
   UpdateChecker get updateChecker => _updateChecker;
+
+  /// Active primary network interface information (Interface name, IP, Subnet / CIDR).
+  NetworkInterfaceInfo? _networkInfo;
+  NetworkInterfaceInfo? get networkInfo => _networkInfo;
+
+  /// Latest real TCP round-trip latency in milliseconds per peer fingerprint.
+  final Map<String, int> _peerLatencies = {};
+  Map<String, int> get peerLatencies => Map.unmodifiable(_peerLatencies);
+
+  int? getLatencyFor(String fingerprint) => _peerLatencies[fingerprint];
+  DateTime? getLastSeenFor(String fingerprint) => _peerLastSeen[fingerprint];
 
   /// UI hook installed by main.dart once the navigator is alive.
   IncomingTransferPrompt? _incomingPrompt;
@@ -176,16 +188,23 @@ class AppState extends ChangeNotifier {
         if (!s.isTerminal) s.peer.fingerprint,
     };
     var changed = false;
-    _peers.removeWhere((fp, _) {
+    _peers.removeWhere((fp, peer) {
       if (active.contains(fp)) return false;
       final seen = _peerLastSeen[fp];
       if (seen != null && seen.isAfter(cutoff)) return false;
       _peerLastSeen.remove(fp);
+      _peerLatencies.remove(fp);
       changed = true;
+      EventLog.instance.add(
+        'Device offline / unlinked: ${peer.alias} (${peer.ip})',
+        category: 'DISCOVERY',
+        level: EventLevel.warn,
+      );
       return true;
     });
     if (changed) notifyListeners();
   }
+
 
   // ─── Symmetric sessions (F3) ───────────────────────────────────────────
   //
@@ -454,6 +473,14 @@ class AppState extends ChangeNotifier {
       fingerprint: fingerprint,
       localIps: ips,
     );
+    final netInfo = await getPrimaryNetworkInfo();
+    state._networkInfo = netInfo;
+    if (netInfo != null) {
+      EventLog.instance.add(
+        'Active interface: ${netInfo.interfaceName} | IP: ${netInfo.ipAddress} | Subnet: ${netInfo.subnet}',
+        category: 'NETWORK',
+      );
+    }
     final history = await TransferHistoryStore.getInstance();
     state._history = history;
     final restored = history.load();
@@ -500,13 +527,15 @@ class AppState extends ChangeNotifier {
     try {
       await state._receiver!.start();
       EventLog.instance.add(
-        'Receiver listening on ${ips.join(", ")}:${state._receiver!.port}',
+        'Server listening on port ${state._receiver!.port} (HTTPS/TLS ready)',
+        category: 'SERVER',
       );
     } catch (e) {
       // Receiving is unavailable (e.g. every candidate port is taken), but
       // the app must still come up so the user can send files and see why.
-      EventLog.instance.add('Could not start receiver: $e');
+      EventLog.instance.add('Could not start receiver: $e', category: 'SERVER', level: EventLevel.error);
     }
+
     await state._discovery!.start();
     if (settings.connectivityMode == ConnectivityMode.hotspot) {
       unawaited(state._kickSubnetScan());
@@ -561,6 +590,10 @@ class AppState extends ChangeNotifier {
   Future<void> refreshDiscovery({bool userInitiated = false}) async {
     if (_networkSilent) return;
     _discovery?.poke();
+    final netInfo = await getPrimaryNetworkInfo();
+    if (netInfo != null) {
+      _networkInfo = netInfo;
+    }
     // Re-probe known peers (including manually-added ones) whose last
     // sighting has gone stale, so renamed devices show their current alias
     // without re-dialling every live peer on every tick.
@@ -576,7 +609,10 @@ class AppState extends ChangeNotifier {
           continue;
         }
         unawaited(sender.probe(peer).then((fresh) {
-          if (fresh != null) _onPeerSeen(fresh);
+          if (fresh != null) {
+            _onPeerSeen(fresh);
+            unawaited(measurePeerLatency(fresh));
+          }
         }));
       }
     }
@@ -589,6 +625,7 @@ class AppState extends ChangeNotifier {
       await _kickSubnetScan(userInitiated: userInitiated);
     }
   }
+
 
   /// Starts a subnet sweep. A sweep already in flight is left alone unless
   /// [userInitiated] is set (explicit refresh / mode change): the periodic
@@ -708,16 +745,25 @@ class AppState extends ChangeNotifier {
   }
 
   void _handleNewReceiveSession(TransferSession session) {
-    EventLog.instance.add(
-      'Incoming transfer from ${session.peer.alias} '
-      '(${session.files.length} file(s))',
-    );
+    final isMessage = session.files.length == 1 && isMessageSnippet(session.files.values.first.file);
+    if (isMessage) {
+      EventLog.instance.add(
+        'Incoming message from ${session.peer.alias} (${session.peer.ip})',
+        category: 'MESSAGE',
+      );
+    } else {
+      EventLog.instance.add(
+        'Incoming transfer from ${session.peer.alias} (${session.files.length} file(s))',
+        category: 'TRANSFER',
+      );
+    }
     _sessions.insert(0, session);
     notifyListeners();
     _attachNotifications(session);
     _attachHistoryPersistence(session);
     _attachForegroundLifecycle(session);
     _attachStatusNotify(session);
+    _attachOutcomeLog(session, session.peer.alias, isReceive: true);
     _refreshForegroundService();
     // The user accepted a transfer from this peer: the session is now
     // symmetric, so they can send back without re-scanning. No pin — the
@@ -908,8 +954,20 @@ class AppState extends ChangeNotifier {
       peer = peer.copyWith(verified: verified);
     }
     final existing = _peers[peer.fingerprint];
+    final isNew = existing == null;
     _peers[peer.fingerprint] = peer;
     _peerLastSeen[peer.fingerprint] = DateTime.now();
+
+    if (isNew) {
+      EventLog.instance.add(
+        'Device detected: ${peer.alias} (${peer.ip}:${peer.port})',
+        category: 'DISCOVERY',
+      );
+    }
+
+    // Proactively measure real TCP connection latency (RTT)
+    unawaited(measurePeerLatency(peer));
+
     // Only notify when something the UI renders (or dials) actually
     // changed. Peers re-announce every 5s and probes re-run every 6s, so an
     // unconditional notify here kept idle pages rebuilding forever.
@@ -922,6 +980,50 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// Measures real TCP round-trip latency in milliseconds by establishing a TCP handshake.
+  Future<int?> measurePeerLatency(Device peer) async {
+    if (_networkSilent || peer.ip.isEmpty) return null;
+    final sw = Stopwatch()..start();
+    try {
+      final socket = await Socket.connect(
+        peer.ip,
+        peer.port,
+        timeout: const Duration(seconds: 2),
+      );
+      sw.stop();
+      socket.destroy();
+      final ms = sw.elapsedMilliseconds;
+      _peerLatencies[peer.fingerprint] = ms;
+      EventLog.instance.add(
+        'Ping to ${peer.alias} (${peer.ip}:${peer.port}) -> ${ms}ms',
+        category: 'PING',
+      );
+      notifyListeners();
+      return ms;
+    } catch (_) {
+      sw.stop();
+      _peerLatencies.remove(peer.fingerprint);
+      return null;
+    }
+  }
+
+  /// Stages and sends a text message to [peer] as a text snippet.
+  Future<TransferSession?> sendTextMessage({
+    required Device peer,
+    required String message,
+  }) async {
+    final trimmed = message.trim();
+    if (trimmed.isEmpty) return null;
+    final tempDir = await getTemporaryDirectory();
+    final info = await stageTextSnippet(trimmed, tempDir);
+    EventLog.instance.add(
+      'Message sent to ${peer.alias} (${peer.ip}): "${trimmed.length > 30 ? '${trimmed.substring(0, 30)}...' : trimmed}"',
+      category: 'MESSAGE',
+    );
+    return sendFiles(peer: peer, files: [info]);
+  }
+
 
   void _onSettingsChanged() {
     // Discovery reads the self device through its provider, so a settings
@@ -974,7 +1076,18 @@ class AppState extends ChangeNotifier {
     // exchange is symmetric and any earlier disconnect block is lifted.
     _linkPeer(peer);
 
-    EventLog.instance.add('Sending ${files.length} file(s) to ${peer.alias}');
+    final isMessage = files.length == 1 && isMessageSnippet(files.first);
+    if (isMessage) {
+      EventLog.instance.add(
+        'Sending message to ${peer.alias} (${peer.ip})',
+        category: 'MESSAGE',
+      );
+    } else {
+      EventLog.instance.add(
+        'Starting file transfer to ${peer.alias} (${files.length} file(s))',
+        category: 'TRANSFER',
+      );
+    }
 
     // Drive the transfer in the background. The sender mutates `session`
     // directly so we don't have to swap anything in the list afterward.
@@ -1006,22 +1119,36 @@ class AppState extends ChangeNotifier {
       List.unmodifiable(_sessions.where((s) => s.groupId == groupId));
 
   /// Records the terminal outcome of [session] to the diagnostics log.
-  void _attachOutcomeLog(TransferSession session, String peerAlias) {
+  void _attachOutcomeLog(TransferSession session, String peerAlias, {bool isReceive = false}) {
     var logged = false;
     session.addListener(() {
       if (logged) return;
+      final isMessage = session.files.length == 1 && isMessageSnippet(session.files.values.first.file);
+      final category = isMessage ? 'MESSAGE' : 'TRANSFER';
+      final type = isMessage ? 'Message' : 'Transfer';
+      final dir = isReceive ? 'from' : 'to';
       switch (session.status) {
         case TransferStatus.completed:
           logged = true;
-          EventLog.instance.add('Transfer to $peerAlias completed');
+          EventLog.instance.add(
+            '$type $dir $peerAlias completed successfully',
+            category: category,
+          );
         case TransferStatus.failed:
           logged = true;
-          EventLog.instance
-              .add('Transfer to $peerAlias failed', level: EventLevel.error);
+          final error = session.files.values.firstOrNull?.error ?? 'connection interrupted';
+          EventLog.instance.add(
+            '$type $dir $peerAlias failed: $error',
+            category: category,
+            level: EventLevel.error,
+          );
         case TransferStatus.cancelled:
           logged = true;
-          EventLog.instance
-              .add('Transfer to $peerAlias cancelled', level: EventLevel.warn);
+          EventLog.instance.add(
+            '$type $dir $peerAlias cancelled',
+            category: category,
+            level: EventLevel.warn,
+          );
         case TransferStatus.awaitingAccept:
         case TransferStatus.transferring:
           return;
