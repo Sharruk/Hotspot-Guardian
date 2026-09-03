@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/models/active_client.dart';
 import '../../core/models/device.dart';
 import '../../core/models/file_info.dart';
+import '../../core/monitoring/observed_traffic.dart';
 import '../../core/platform/incoming_share.dart';
 import '../../core/platform/reveal_folder.dart';
 import '../../core/util/event_log.dart';
@@ -221,7 +223,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: VSpace.x4),
 
-                  // 2. CONNECTED / DETECTED DEVICES
+                  // 2. CONNECTED / DETECTED DEVICES (two-tier)
                   _buildDevicesSection(
                     context,
                     state: state,
@@ -230,7 +232,11 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: VSpace.x4),
 
-                  // 3. ACTIVE TRANSFERS (If any)
+                  // 3. OBSERVED TRAFFIC CARD
+                  _buildTrafficCard(context, scheme: scheme),
+                  const SizedBox(height: VSpace.x4),
+
+                  // 4. ACTIVE TRANSFERS (If any)
                   if (clusters.isNotEmpty) ...[
                     Row(
                       children: [
@@ -255,7 +261,7 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(height: VSpace.x3),
                   ],
 
-                  // 4. LIVE EVENT & CONNECTION LOG
+                  // 5. LIVE EVENT & CONNECTION LOG
                   _buildEventLogCard(context, scheme: scheme),
                 ],
               ),
@@ -388,140 +394,180 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: scheme.primary.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: scheme.primary.withOpacity(0.25)),
+          // Gateway rows (Phase 4A)
+          const Divider(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: _buildInfoItem(
+                  title: 'Default Gateway IP',
+                  value: state.gatewayIp ?? 'Detecting...',
+                  icon: Icons.router,
+                  scheme: scheme,
+                ),
               ),
-              child: Row(
-                children: [
-                  Icon(Icons.public, size: 16, color: scheme.primary),
-                  const SizedBox(width: 8),
-                  Text(
-                    'WEB PORTAL:',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: SelectableText(
-                      'https://$localIp:$port/',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: 'https://$localIp:$port/'));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Portal URL copied to clipboard'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.copy, size: 13, color: scheme.primary),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Copy URL',
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: scheme.primary),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+              Expanded(
+                child: _buildInfoItem(
+                  title: 'Gateway MAC',
+                  value: state.gatewayMac != null
+                      ? state.gatewayMac!.toUpperCase()
+                      : (state.isMonitorRefreshing ? 'Resolving...' : 'Unavailable'),
+                  icon: Icons.memory_outlined,
+                  scheme: scheme,
+                ),
               ),
+              Expanded(
+                child: _buildInfoItem(
+                  title: 'Subnet Mask',
+                  value: state.networkInfo?.subnetMask ?? '255.255.255.0',
+                  icon: Icons.filter_list,
+                  scheme: scheme,
+                ),
+              ),
+              Expanded(
+                child: _buildInfoItem(
+                  title: 'Discovered Clients',
+                  value: state.activeClients.length.toString(),
+                  icon: Icons.people_outline,
+                  scheme: scheme,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: scheme.primary.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: scheme.primary.withOpacity(0.25)),
             ),
-            const SizedBox(height: 8),
-            FutureBuilder<Directory>(
-              future: state.resolveSaveDir(),
-              builder: (context, snapshot) {
-                final savePath = snapshot.data?.path ?? 'Resolving...';
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHigh.withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
+            child: Row(
+              children: [
+                Icon(Icons.public, size: 16, color: scheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'WEB PORTAL:',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                    color: scheme.primary,
                   ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.folder_outlined, size: 16, color: scheme.onSurfaceVariant),
-                      const SizedBox(width: 8),
-                      Text(
-                        'RECEIVED FILES:',
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SelectableText(
+                    'https://$localIp:$port/',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+                InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: 'https://$localIp:$port/'));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Portal URL copied to clipboard'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.copy, size: 13, color: scheme.primary),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Copy URL',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: scheme.primary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          FutureBuilder<Directory>(
+            future: state.resolveSaveDir(),
+            builder: (context, snapshot) {
+              final savePath = snapshot.data?.path ?? 'Resolving...';
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHigh.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.folder_outlined, size: 16, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 8),
+                    Text(
+                      'RECEIVED FILES:',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SelectableText(
+                        savePath,
                         style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
-                          color: scheme.onSurfaceVariant,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          fontFamily: 'monospace',
+                          color: scheme.onSurface,
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SelectableText(
-                          savePath,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            fontFamily: 'monospace',
-                            color: scheme.onSurface,
-                          ),
-                        ),
-                      ),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(6),
-                        onTap: () async {
-                          final dir = await state.resolveSaveDir();
-                          await dir.create(recursive: true);
-                          await revealFolder(dir.path);
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.folder_open, size: 14, color: scheme.primary),
-                              const SizedBox(width: 4),
-                              Text(
-                                'Open Folder',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: scheme.primary,
-                                ),
+                    ),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: () async {
+                        final dir = await state.resolveSaveDir();
+                        await dir.create(recursive: true);
+                        await revealFolder(dir.path);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.folder_open, size: 14, color: scheme.primary),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Open Folder',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.primary,
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildInfoItem({
     required String title,
@@ -558,6 +604,7 @@ class _HomePageState extends State<HomePage> {
     required ColorScheme scheme,
     required List<Device> peers,
   }) {
+    final activeClients = state.activeClients;
     return Card(
       elevation: 0,
       color: scheme.surfaceContainerLow,
@@ -570,12 +617,13 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ─── Section header ───────────────────────────────────────────
             Row(
               children: [
                 Icon(Icons.devices, size: 20, color: scheme.primary),
                 const SizedBox(width: 8),
                 Text(
-                  'DETECTED DEVICES ON HOTSPOT (${peers.length})',
+                  'DEVICES ON HOTSPOT',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
@@ -593,11 +641,34 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const Divider(height: 20),
+
+            // ─── TIER 1: Hotspot Guardian Peers ──────────────────────────
+            Row(
+              children: [
+                const Icon(Icons.shield_outlined, size: 15),
+                const SizedBox(width: 6),
+                Text(
+                  'HOTSPOT GUARDIAN DEVICES  (${peers.length})',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Running or accessing Hotspot Guardian — full messaging & file transfer available.',
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 10),
             if (peers.isEmpty)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerLowest,
                   borderRadius: BorderRadius.circular(12),
@@ -605,17 +676,17 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.wifi_find, size: 36, color: scheme.onSurfaceVariant),
+                    Icon(Icons.wifi_find, size: 32, color: scheme.onSurfaceVariant),
                     const SizedBox(height: 8),
                     const Text(
-                      'No Active Devices Discovered Yet',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      'No Hotspot Guardian Devices Discovered Yet',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Scanning local hotspot subnet (${state.networkInfo?.subnet ?? "192.168.43.0/24"}) & listening to UDP multicast.\n'
-                      'Ensure other mobile phones on this hotspot are running Hotspot Guardian / LanLink.',
-                      style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                      'Scanning subnet (${state.networkInfo?.subnet ?? "192.168.43.0/24"}) & listening to UDP multicast.\n'
+                      'Other devices must be running LanLink / Hotspot Guardian or using the Web Portal.',
+                      style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                       textAlign: TextAlign.center,
                     ),
                   ],
@@ -630,7 +701,6 @@ class _HomePageState extends State<HomePage> {
                 itemBuilder: (context, index) {
                   final peer = peers[index];
                   final latency = state.getLatencyFor(peer.fingerprint);
-                  final lastSeen = state.getLastSeenFor(peer.fingerprint);
                   final formattedLatency = latency != null ? '$latency ms' : 'N/A';
 
                   return Container(
@@ -712,7 +782,7 @@ class _HomePageState extends State<HomePage> {
                             ],
                           ),
                         ),
-                        // Latency Display & Ping Trigger
+                        // Latency
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
@@ -740,9 +810,8 @@ class _HomePageState extends State<HomePage> {
                             ],
                           ),
                         ),
-
                         const SizedBox(width: 8),
-                        // Action Buttons: Send Message / Send File
+                        // Action Buttons: only for Hotspot Guardian peers
                         OutlinedButton.icon(
                           onPressed: () => _showSendMessageDialog(context, peer),
                           icon: const Icon(Icons.chat_bubble_outline, size: 14),
@@ -771,11 +840,381 @@ class _HomePageState extends State<HomePage> {
                   );
                 },
               ),
+
+            // ─── TIER 2: Discovered Hotspot Clients (ARP) ────────────────
+            const SizedBox(height: 20),
+            const Divider(height: 1),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Icon(Icons.manage_search, size: 15),
+                const SizedBox(width: 6),
+                Text(
+                  'DISCOVERED HOTSPOT CLIENTS  (${activeClients.length})',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const Spacer(),
+                if (state.isMonitorRefreshing)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Observed via ARP/neighbour table — IP/MAC only. NOT guaranteed to be all hotspot devices.',
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 10),
+            if (activeClients.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
+                ),
+                child: Text(
+                  state.isMonitorRefreshing
+                      ? 'Scanning ARP table...'
+                      : 'No additional devices in ARP cache yet.\nPress Refresh to rescan.',
+                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                  textAlign: TextAlign.center,
+                ),
+              )
+            else
+              _buildArpClientsTable(context, clients: activeClients, scheme: scheme),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildArpClientsTable(
+    BuildContext context, {
+    required List<ActiveClient> clients,
+    required ColorScheme scheme,
+  }) {
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(2),
+        1: FlexColumnWidth(3),
+        2: FlexColumnWidth(2),
+        3: FlexColumnWidth(1.5),
+      },
+      children: [
+        TableRow(
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh.withOpacity(0.5),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+          ),
+          children: [
+            _tableHeader('IP ADDRESS', scheme),
+            _tableHeader('MAC ADDRESS', scheme),
+            _tableHeader('STATUS', scheme),
+            _tableHeader('LAST SEEN', scheme),
+          ],
+        ),
+        for (final client in clients)
+          TableRow(
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: scheme.outlineVariant.withOpacity(0.2)),
+              ),
+            ),
+            children: [
+              _tableCell(
+                child: Row(
+                  children: [
+                    Icon(Icons.devices_other, size: 13, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 4),
+                    Text(
+                      client.ip,
+                      style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                    ),
+                  ],
+                ),
+              ),
+              _tableCell(
+                child: Text(
+                  client.macDisplay,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: client.mac == 'Unavailable'
+                        ? scheme.onSurfaceVariant
+                        : scheme.onSurface,
+                  ),
+                ),
+              ),
+              _tableCell(
+                child: Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: client.isOnline ? Colors.green : Colors.grey,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      client.isOnline ? 'Discovered' : 'Offline',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: client.isOnline ? Colors.green.shade800 : scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _tableCell(
+                child: Text(
+                  client.lastSeenRelative,
+                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _tableHeader(String label, ColorScheme scheme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
+          color: scheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _tableCell({required Widget child}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      child: child,
+    );
+  }
+
+  // ─── Phase 4A: Observed Traffic Card ─────────────────────────────────────
+
+  Widget _buildTrafficCard(BuildContext context, {required ColorScheme scheme}) {
+    return Card(
+      elevation: 0,
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: scheme.outlineVariant.withOpacity(0.6)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ListenableBuilder(
+          listenable: ObservedTraffic.instance,
+          builder: (context, _) {
+            final t = ObservedTraffic.instance;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header
+                Row(
+                  children: [
+                    Icon(Icons.monitor_heart_outlined, size: 20, color: scheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'OBSERVED HOTSPOT GUARDIAN TRAFFIC',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.8,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: t.reset,
+                      icon: const Icon(Icons.restart_alt, size: 14),
+                      label: const Text('Reset', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // Scope disclaimer
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.amber.withOpacity(0.4)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, size: 14, color: Colors.amber.shade800),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Counts ONLY traffic handled by this application. '
+                          'Internet usage of other hotspot clients cannot be measured from this laptop.',
+                          style: TextStyle(fontSize: 11, color: Colors.amber.shade900),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Stats grid
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.download_outlined,
+                        label: 'Total Received',
+                        value: ObservedTraffic.formatBytes(t.totalBytesReceived),
+                        color: Colors.blue,
+                        scheme: scheme,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.upload_outlined,
+                        label: 'Total Sent (Resp.)',
+                        value: ObservedTraffic.formatBytes(t.totalBytesSent),
+                        color: Colors.teal,
+                        scheme: scheme,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.chat_bubble_outline,
+                        label: 'Messages',
+                        value: t.messageCount.toString(),
+                        color: Colors.orange,
+                        scheme: scheme,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.file_upload_outlined,
+                        label: 'File Uploads',
+                        value: t.uploadCount.toString(),
+                        color: Colors.green,
+                        scheme: scheme,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.speed,
+                        label: 'Last Speed',
+                        value: ObservedTraffic.formatSpeed(t.lastSpeedBytesPerSec),
+                        color: Colors.purple,
+                        scheme: scheme,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.trending_up,
+                        label: 'Peak Speed',
+                        value: ObservedTraffic.formatSpeed(t.peakSpeedBytesPerSec),
+                        color: Colors.red,
+                        scheme: scheme,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.timer_outlined,
+                        label: 'Last Duration',
+                        value: ObservedTraffic.formatDuration(t.lastTransferDuration),
+                        color: Colors.indigo,
+                        scheme: scheme,
+                      ),
+                    ),
+                    Expanded(
+                      child: _buildTrafficStat(
+                        icon: Icons.swap_vert,
+                        label: 'Active Transfers',
+                        value: t.activeTransfers.toString(),
+                        color: Colors.cyan,
+                        scheme: scheme,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTrafficStat({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+    required ColorScheme scheme,
+  }) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 13, color: color),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: color,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── End Phase 4A ─────────────────────────────────────────────────────────
 
   Widget _buildEventLogCard(BuildContext context, {required ColorScheme scheme}) {
     return Card(

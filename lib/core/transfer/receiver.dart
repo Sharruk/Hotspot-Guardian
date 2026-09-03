@@ -19,6 +19,7 @@ import '../protocol/constants.dart';
 import '../security/device_certificate.dart';
 import '../util/event_log.dart';
 import '../util/safe_paths.dart';
+import '../monitoring/observed_traffic.dart';
 import '../web/web_portal.dart';
 
 /// Outcome the UI returns when asked to approve an incoming transfer.
@@ -356,6 +357,9 @@ class Receiver {
       if (kDebugMode) debugPrint('[receiver] Failed to persist message: $e');
     }
 
+    // Phase 4A: account for this message in observed traffic counters
+    ObservedTraffic.instance.recordWebMessage(bytes: message.length);
+
     return Response.ok(
       json.encode({
         'success': true,
@@ -439,6 +443,13 @@ class Receiver {
     EventLog.instance.add(
       'Browser upload completed: $safeName ($receivedBytes bytes in ${elapsedSec.toStringAsFixed(2)}s, $speedStr)',
       category: 'TRANSFER',
+    );
+
+    // Phase 4A: account for this upload in observed traffic counters
+    ObservedTraffic.instance.recordWebUpload(
+      bytes: receivedBytes,
+      speedBytesPerSec: speedBytesPerSec,
+      duration: Duration(milliseconds: elapsedMs),
     );
 
     return Response.ok(

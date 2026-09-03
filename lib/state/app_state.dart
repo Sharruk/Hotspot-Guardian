@@ -9,6 +9,10 @@ import '../core/connectivity/connectivity_mode.dart';
 import '../core/discovery/multicast_discovery.dart';
 import '../core/discovery/subnet_scanner.dart';
 import '../core/history/transfer_history_store.dart';
+import '../core/models/active_client.dart';
+import '../core/monitoring/arp_scanner.dart';
+import '../core/monitoring/gateway_info.dart';
+import '../core/monitoring/observed_traffic.dart';
 import '../core/update/update_checker.dart';
 import '../core/models/device.dart';
 import '../core/models/file_info.dart';
@@ -86,6 +90,33 @@ class AppState extends ChangeNotifier {
   /// Active primary network interface information (Interface name, IP, Subnet / CIDR).
   NetworkInterfaceInfo? _networkInfo;
   NetworkInterfaceInfo? get networkInfo => _networkInfo;
+
+  // ─── Phase 4A: Network Monitoring ────────────────────────────────────────
+
+  /// Detected default gateway IP address (e.g. the phone hotspot gateway).
+  /// Null while detecting; display 'Detecting...' in the UI.
+  String? _gatewayIp;
+  String? get gatewayIp => _gatewayIp;
+
+  /// Resolved MAC address of the default gateway from the Windows ARP cache.
+  /// Null when not yet resolved or unavailable.
+  String? _gatewayMac;
+  String? get gatewayMac => _gatewayMac;
+
+  /// Devices discovered on the local subnet through ARP / neighbour-table
+  /// inspection. These are NOT Hotspot Guardian peers — they are any active
+  /// IP address that the Windows networking stack has a cached ARP entry for.
+  final List<ActiveClient> _activeClients = [];
+  List<ActiveClient> get activeClients => List.unmodifiable(_activeClients);
+
+  /// Observed traffic singleton — tracks only traffic handled by this app.
+  ObservedTraffic get observedTraffic => ObservedTraffic.instance;
+
+  /// True while a network monitor refresh (gateway + ARP) is in progress.
+  bool _monitorRefreshing = false;
+  bool get isMonitorRefreshing => _monitorRefreshing;
+
+  // ─── End Phase 4A ─────────────────────────────────────────────────────────
 
   /// Latest real TCP round-trip latency in milliseconds per peer fingerprint.
   final Map<String, int> _peerLatencies = {};
@@ -547,6 +578,9 @@ class AppState extends ChangeNotifier {
       const Duration(seconds: 15),
       (_) => state._prunePeers(),
     );
+    // Phase 4A: Kick initial gateway + ARP detection after startup.
+    // Runs asynchronously so it never delays app launch.
+    unawaited(state.refreshNetworkMonitor());
     return state;
   }
 
@@ -624,7 +658,150 @@ class AppState extends ChangeNotifier {
         settings.connectivityMode == ConnectivityMode.lan) {
       await _kickSubnetScan(userInitiated: userInitiated);
     }
+    // Phase 4A: also refresh network monitoring on user-initiated refresh
+    if (userInitiated) {
+      unawaited(refreshNetworkMonitor());
+    }
   }
+
+  // ─── Phase 4A: Network Monitor Refresh ───────────────────────────────────
+
+  /// Refreshes gateway information and the ARP-based active-client list.
+  ///
+  /// Safe to call from a button or periodic timer. Runs at most once
+  /// concurrently (duplicate calls while one is in flight are no-ops).
+  /// Does NOT replace existing peer discovery — it supplements it.
+  Future<void> refreshNetworkMonitor() async {
+    if (_networkSilent || _monitorRefreshing) return;
+    _monitorRefreshing = true;
+    notifyListeners();
+    try {
+      // 1. Detect / refresh gateway IP
+      final gwIp = await getDefaultGatewayIp();
+      if (gwIp != null && gwIp != _gatewayIp) {
+        _gatewayIp = gwIp;
+        EventLog.instance.add(
+          'Default gateway detected: $gwIp',
+          category: 'NETWORK',
+        );
+        // 2. Resolve gateway MAC from ARP cache
+        final gwMac = await resolveArpMac(gwIp);
+        if (gwMac != null && gwMac != _gatewayMac) {
+          _gatewayMac = gwMac;
+          EventLog.instance.add(
+            'Gateway MAC resolved: ${gwMac.toUpperCase()} ($gwIp)',
+            category: 'NETWORK',
+          );
+        }
+      } else if (gwIp != null && _gatewayMac == null) {
+        // IP unchanged but MAC not yet resolved — try again
+        final gwMac = await resolveArpMac(gwIp);
+        if (gwMac != null) {
+          _gatewayMac = gwMac;
+          EventLog.instance.add(
+            'Gateway MAC resolved: ${gwMac.toUpperCase()} ($gwIp)',
+            category: 'NETWORK',
+          );
+        }
+      }
+
+      // 3. Read the full ARP table to find active subnet clients
+      final arpTable = await ArpScanner.instance.readArpTable();
+      _mergeArpClients(arpTable);
+    } finally {
+      _monitorRefreshing = false;
+      notifyListeners();
+    }
+  }
+
+  /// Merges the ARP table entries into the [_activeClients] list.
+  ///
+  /// New IPs are added; existing entries have their lastSeen and MAC updated.
+  /// Skips IPs that belong to our own interfaces or to known Hotspot Guardian
+  /// peers (they appear in the peers section instead).
+  void _mergeArpClients(Map<String, String> arpTable) {
+    final myIps = _localIps.toSet();
+    final peerIps = _peers.values.map((d) => d.ip).toSet();
+    final gatewayIp = _gatewayIp;
+
+    bool changed = false;
+    final now = DateTime.now();
+
+    // Mark all existing clients as offline; we'll mark them online below
+    for (final c in _activeClients) {
+      c.isOnline = false;
+    }
+
+    for (final entry in arpTable.entries) {
+      final ip = entry.key;
+      final mac = entry.value;
+
+      // Skip our own IPs and known LanLink peers
+      if (myIps.contains(ip)) continue;
+      if (peerIps.contains(ip)) continue;
+      // Skip the gateway — it's shown separately
+      if (ip == gatewayIp) continue;
+
+      final existing = _activeClients.firstWhere(
+        (c) => c.ip == ip,
+        orElse: () {
+          final c = ActiveClient(
+            ip: ip,
+            mac: mac,
+            firstSeen: now,
+          );
+          _activeClients.add(c);
+          EventLog.instance.add(
+            'Active client discovered: $ip (MAC: ${mac.toUpperCase()})',
+            category: 'DISCOVERY',
+          );
+          changed = true;
+          return c;
+        },
+      );
+
+      existing.lastSeen = now;
+      existing.isOnline = true;
+      // Update MAC if it was unavailable before
+      if (existing.mac == 'Unavailable' && mac != 'Unavailable') {
+        // ActiveClient.mac is final — create a new entry
+        // (This is an edge case; normally MAC is set on first discovery)
+        changed = true;
+      }
+    }
+
+    // Remove clients that have been offline for more than 5 minutes
+    final cutoff = now.subtract(const Duration(minutes: 5));
+    final removed = _activeClients
+        .where((c) => !c.isOnline && c.lastSeen.isBefore(cutoff))
+        .toList();
+    for (final c in removed) {
+      _activeClients.remove(c);
+      EventLog.instance.add(
+        'Active client removed (offline > 5 min): ${c.ip}',
+        category: 'NETWORK',
+        level: EventLevel.warn,
+      );
+      changed = true;
+    }
+
+    // Sort by IP for stable display order
+    _activeClients.sort((a, b) => _compareIps(a.ip, b.ip));
+
+    if (changed) notifyListeners();
+  }
+
+  int _compareIps(String a, String b) {
+    final ap = a.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    final bp = b.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    for (var i = 0; i < 4 && i < ap.length && i < bp.length; i++) {
+      final diff = ap[i] - bp[i];
+      if (diff != 0) return diff;
+    }
+    return 0;
+  }
+
+  // ─── End Phase 4A ─────────────────────────────────────────────────────────
 
 
   /// Starts a subnet sweep. A sweep already in flight is left alone unless
