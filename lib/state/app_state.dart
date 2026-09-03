@@ -764,8 +764,7 @@ class AppState extends ChangeNotifier {
       existing.isOnline = true;
       // Update MAC if it was unavailable before
       if (existing.mac == 'Unavailable' && mac != 'Unavailable') {
-        // ActiveClient.mac is final — create a new entry
-        // (This is an edge case; normally MAC is set on first discovery)
+        existing.mac = mac;
         changed = true;
       }
     }

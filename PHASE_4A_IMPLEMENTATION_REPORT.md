@@ -208,6 +208,7 @@ Clients offline for more than 5 minutes are pruned from the list.
 |-------|------|
 | POST /api/hotspot/message completes successfully | `ObservedTraffic.instance.recordWebMessage(bytes: message.length)` |
 | POST /api/hotspot/upload completes successfully | `ObservedTraffic.instance.recordWebUpload(bytes:, speedBytesPerSec:, duration:)` |
+| LanLink session file upload completes | `ObservedTraffic.instance.recordLanLinkTransfer(bytes:, speedBytesPerSec:, duration:)` |
 
 The values passed are the **actually measured** values from the existing transfer
 logic — no estimates or fabrication.
@@ -468,7 +469,7 @@ was not run — it must be run on the Windows build machine):
 
 1. **`withOpacity` deprecation** — Flutter 3.27+ deprecates `Color.withOpacity()` in favour of `Color.withValues(alpha: ...)`. The existing codebase uses `withOpacity` throughout; Phase 4A follows the same existing style. This does not prevent compilation.
 
-2. **`ActiveClient.mac` is `final`** — when an existing client has `mac == 'Unavailable'` and a new ARP scan finds the real MAC, the field cannot be updated in-place. In practice, MAC is always resolved on first discovery so this edge case is unlikely to occur.
+2. **`ActiveClient.mac` mutability** — `ActiveClient.mac` is mutable (`String mac`), allowing `_mergeArpClients` to directly update an entry's MAC address if it was initially `Unavailable` and resolved on a subsequent ARP scan.
 
 3. **`GatewayInfo` class** — `lib/core/monitoring/gateway_info.dart` was created as a standalone utility class. `AppState.refreshNetworkMonitor()` uses the equivalent functions in `network.dart` directly. Both implement the same logic. The `GatewayInfo` class is available for future modular use.
 

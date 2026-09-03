@@ -21,7 +21,7 @@ class ActiveClient {
 
   /// MAC address resolved from the Windows ARP / neighbour table,
   /// or `'Unavailable'` when the OS has no cached entry.
-  final String mac;
+  String mac;
 
   /// Reverse-DNS / NetBIOS hostname if resolved; `'Unknown'` otherwise.
   final String hostname;

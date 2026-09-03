@@ -703,6 +703,7 @@ class Receiver {
       return Response.internalServerError(body: 'cannot open temp file');
     }
 
+    final startTime = DateTime.now();
     int received = offset;
     int unflushed = 0;
     String finalPath;
@@ -865,6 +866,17 @@ class Receiver {
     }
     ps.session
         .markFile(fileId, TransferStatus.completed, savedPath: visiblePath);
+
+    // Phase 4A: account for LanLink transfer in observed traffic
+    final payloadBytes = received - offset;
+    final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
+    final elapsedSec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
+    final speedBytesPerSec = payloadBytes > 0 ? payloadBytes / elapsedSec : 0.0;
+    ObservedTraffic.instance.recordLanLinkTransfer(
+      bytes: payloadBytes > 0 ? payloadBytes : 0,
+      speedBytesPerSec: speedBytesPerSec,
+      duration: Duration(milliseconds: elapsedMs),
+    );
 
     // If every file in the session is done, mark the session complete.
     final allDone = ps.session.files.values

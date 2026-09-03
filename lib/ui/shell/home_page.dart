@@ -394,176 +394,176 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-          // Gateway rows (Phase 4A)
-          const Divider(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: _buildInfoItem(
-                  title: 'Default Gateway IP',
-                  value: state.gatewayIp ?? 'Detecting...',
-                  icon: Icons.router,
-                  scheme: scheme,
-                ),
-              ),
-              Expanded(
-                child: _buildInfoItem(
-                  title: 'Gateway MAC',
-                  value: state.gatewayMac != null
-                      ? state.gatewayMac!.toUpperCase()
-                      : (state.isMonitorRefreshing ? 'Resolving...' : 'Unavailable'),
-                  icon: Icons.memory_outlined,
-                  scheme: scheme,
-                ),
-              ),
-              Expanded(
-                child: _buildInfoItem(
-                  title: 'Subnet Mask',
-                  value: state.networkInfo?.subnetMask ?? '255.255.255.0',
-                  icon: Icons.filter_list,
-                  scheme: scheme,
-                ),
-              ),
-              Expanded(
-                child: _buildInfoItem(
-                  title: 'Discovered Clients',
-                  value: state.activeClients.length.toString(),
-                  icon: Icons.people_outline,
-                  scheme: scheme,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: scheme.primary.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: scheme.primary.withOpacity(0.25)),
-            ),
-            child: Row(
+            // Gateway rows (Phase 4A)
+            const Divider(height: 20),
+            Row(
               children: [
-                Icon(Icons.public, size: 16, color: scheme.primary),
-                const SizedBox(width: 8),
-                Text(
-                  'WEB PORTAL:',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                    color: scheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 8),
                 Expanded(
-                  child: SelectableText(
-                    'https://$localIp:$port/',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      fontFamily: 'monospace',
-                    ),
+                  child: _buildInfoItem(
+                    title: 'Default Gateway IP',
+                    value: state.gatewayIp ?? 'Detecting...',
+                    icon: Icons.router,
+                    scheme: scheme,
                   ),
                 ),
-                InkWell(
-                  borderRadius: BorderRadius.circular(6),
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: 'https://$localIp:$port/'));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Portal URL copied to clipboard'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.copy, size: 13, color: scheme.primary),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Copy URL',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: scheme.primary),
-                        ),
-                      ],
-                    ),
+                Expanded(
+                  child: _buildInfoItem(
+                    title: 'Gateway MAC',
+                    value: state.gatewayMac != null
+                        ? state.gatewayMac!.toUpperCase()
+                        : (state.isMonitorRefreshing ? 'Resolving...' : 'Unavailable'),
+                    icon: Icons.memory_outlined,
+                    scheme: scheme,
+                  ),
+                ),
+                Expanded(
+                  child: _buildInfoItem(
+                    title: 'Subnet Mask',
+                    value: state.networkInfo?.subnetMask ?? '255.255.255.0',
+                    icon: Icons.filter_list,
+                    scheme: scheme,
+                  ),
+                ),
+                Expanded(
+                  child: _buildInfoItem(
+                    title: 'Discovered Clients',
+                    value: state.activeClients.length.toString(),
+                    icon: Icons.people_outline,
+                    scheme: scheme,
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 8),
-          FutureBuilder<Directory>(
-            future: state.resolveSaveDir(),
-            builder: (context, snapshot) {
-              final savePath = snapshot.data?.path ?? 'Resolving...';
-              return Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHigh.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.folder_outlined, size: 16, color: scheme.onSurfaceVariant),
-                    const SizedBox(width: 8),
-                    Text(
-                      'RECEIVED FILES:',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
-                        color: scheme.onSurfaceVariant,
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: scheme.primary.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: scheme.primary.withOpacity(0.25)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.public, size: 16, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'WEB PORTAL:',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SelectableText(
+                      'https://$localIp:$port/',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'monospace',
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: SelectableText(
-                        savePath,
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: 'https://$localIp:$port/'));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Portal URL copied to clipboard'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.copy, size: 13, color: scheme.primary),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Copy URL',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: scheme.primary),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            FutureBuilder<Directory>(
+              future: state.resolveSaveDir(),
+              builder: (context, snapshot) {
+                final savePath = snapshot.data?.path ?? 'Resolving...';
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHigh.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.folder_outlined, size: 16, color: scheme.onSurfaceVariant),
+                      const SizedBox(width: 8),
+                      Text(
+                        'RECEIVED FILES:',
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          fontFamily: 'monospace',
-                          color: scheme.onSurface,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                          color: scheme.onSurfaceVariant,
                         ),
                       ),
-                    ),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(6),
-                      onTap: () async {
-                        final dir = await state.resolveSaveDir();
-                        await dir.create(recursive: true);
-                        await revealFolder(dir.path);
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.folder_open, size: 14, color: scheme.primary),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Open Folder',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: scheme.primary,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: SelectableText(
+                          savePath,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            fontFamily: 'monospace',
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () async {
+                          final dir = await state.resolveSaveDir();
+                          await dir.create(recursive: true);
+                          await revealFolder(dir.path);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.folder_open, size: 14, color: scheme.primary),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Open Folder',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: scheme.primary,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
       ),
     ),
   );
