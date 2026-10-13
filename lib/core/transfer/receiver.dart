@@ -19,6 +19,7 @@ import '../protocol/constants.dart';
 import '../security/device_certificate.dart';
 import '../util/event_log.dart';
 import '../util/safe_paths.dart';
+import '../util/text_payload.dart';
 import '../monitoring/observed_traffic.dart';
 import '../web/web_portal.dart';
 
@@ -357,8 +358,11 @@ class Receiver {
       if (kDebugMode) debugPrint('[receiver] Failed to persist message: $e');
     }
 
-    // Phase 4A: account for this message in observed traffic counters
-    ObservedTraffic.instance.recordWebMessage(bytes: message.length);
+    // Phase 4A/4B: account for this message in observed traffic counters
+    ObservedTraffic.instance.recordWebMessage(
+      bytes: message.length,
+      clientIp: clientIp,
+    );
 
     return Response.ok(
       json.encode({
@@ -445,11 +449,12 @@ class Receiver {
       category: 'TRANSFER',
     );
 
-    // Phase 4A: account for this upload in observed traffic counters
+    // Phase 4A/4B: account for this upload in observed traffic counters
     ObservedTraffic.instance.recordWebUpload(
       bytes: receivedBytes,
       speedBytesPerSec: speedBytesPerSec,
       duration: Duration(milliseconds: elapsedMs),
+      clientIp: clientIp,
     );
 
     return Response.ok(
@@ -867,15 +872,19 @@ class Receiver {
     ps.session
         .markFile(fileId, TransferStatus.completed, savedPath: visiblePath);
 
-    // Phase 4A: account for LanLink transfer in observed traffic
+    // Phase 4A/4B: account for LanLink transfer in observed traffic
     final payloadBytes = received - offset;
     final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
     final elapsedSec = elapsedMs > 0 ? elapsedMs / 1000.0 : 0.001;
     final speedBytesPerSec = payloadBytes > 0 ? payloadBytes / elapsedSec : 0.0;
+    final isMessage = ps.session.files.length == 1 &&
+        isMessageSnippet(ps.session.files.values.first.file);
     ObservedTraffic.instance.recordLanLinkTransfer(
       bytes: payloadBytes > 0 ? payloadBytes : 0,
       speedBytesPerSec: speedBytesPerSec,
       duration: Duration(milliseconds: elapsedMs),
+      peerIp: ps.session.peer.ip,
+      isMessage: isMessage,
     );
 
     // If every file in the session is done, mark the session complete.

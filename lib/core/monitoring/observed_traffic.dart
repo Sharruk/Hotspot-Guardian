@@ -1,4 +1,57 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// Per-device application traffic accounting record.
+///
+/// Tracks only traffic handled by Hotspot Guardian to/from a specific device IP.
+class DeviceTrafficRecord {
+  DeviceTrafficRecord({
+    required this.ip,
+    this.bytesReceived = 0,
+    this.bytesSent = 0,
+    this.filesReceivedCount = 0,
+    this.filesSentCount = 0,
+    this.messageCount = 0,
+    DateTime? lastActivity,
+  }) : lastActivity = lastActivity ?? DateTime.now();
+
+  final String ip;
+  int bytesReceived;
+  int bytesSent;
+  int filesReceivedCount;
+  int filesSentCount;
+  int messageCount;
+  DateTime lastActivity;
+
+  int get totalBytes => bytesReceived + bytesSent;
+  double get totalMB => totalBytes / (1024.0 * 1024.0);
+  String get totalMBFormatted => '${totalMB.toStringAsFixed(2)} MB';
+
+  Map<String, dynamic> toJson() => {
+        'ip': ip,
+        'bytesReceived': bytesReceived,
+        'bytesSent': bytesSent,
+        'filesReceivedCount': filesReceivedCount,
+        'filesSentCount': filesSentCount,
+        'messageCount': messageCount,
+        'lastActivity': lastActivity.toIso8601String(),
+      };
+
+  factory DeviceTrafficRecord.fromJson(Map<String, dynamic> json) =>
+      DeviceTrafficRecord(
+        ip: json['ip'] as String? ?? '0.0.0.0',
+        bytesReceived: json['bytesReceived'] as int? ?? 0,
+        bytesSent: json['bytesSent'] as int? ?? 0,
+        filesReceivedCount: json['filesReceivedCount'] as int? ?? 0,
+        filesSentCount: json['filesSentCount'] as int? ?? 0,
+        messageCount: json['messageCount'] as int? ?? 0,
+        lastActivity: json['lastActivity'] != null
+            ? DateTime.tryParse(json['lastActivity'] as String)
+            : null,
+      );
+}
 
 /// Tracks application-level traffic handled by Hotspot Guardian.
 ///
@@ -16,12 +69,13 @@ class ObservedTraffic extends ChangeNotifier {
   ObservedTraffic._();
 
   static final ObservedTraffic instance = ObservedTraffic._();
+  static const _storageKey = 'hotspot_guardian_device_traffic_v1';
 
   /// Total bytes received by the Hotspot Guardian server (messages + uploads).
   int _totalBytesReceived = 0;
   int get totalBytesReceived => _totalBytesReceived;
 
-  /// Total bytes of responses/confirmations sent by the server.
+  /// Total bytes sent by Hotspot Guardian (files + messages + responses).
   int _totalBytesSent = 0;
   int get totalBytesSent => _totalBytesSent;
 
@@ -49,6 +103,56 @@ class ObservedTraffic extends ChangeNotifier {
   Duration _lastTransferDuration = Duration.zero;
   Duration get lastTransferDuration => _lastTransferDuration;
 
+  /// Per-device traffic records keyed by device IPv4 address.
+  final Map<String, DeviceTrafficRecord> _perDeviceTraffic = {};
+  Map<String, DeviceTrafficRecord> get perDeviceTraffic =>
+      Map.unmodifiable(_perDeviceTraffic);
+
+  /// Returns the per-device traffic record for [ip], creating a zeroed record if absent.
+  DeviceTrafficRecord getRecordForIp(String ip) {
+    return _perDeviceTraffic[ip] ??
+        DeviceTrafficRecord(ip: ip, bytesReceived: 0, bytesSent: 0);
+  }
+
+  DeviceTrafficRecord _getOrCreate(String ip) {
+    return _perDeviceTraffic.putIfAbsent(
+      ip,
+      () => DeviceTrafficRecord(ip: ip),
+    );
+  }
+
+  // ─── Persistence ──────────────────────────────────────────────────────────
+
+  Future<void> loadFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_storageKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = json.decode(raw);
+        if (decoded is List) {
+          _perDeviceTraffic.clear();
+          for (final item in decoded) {
+            if (item is Map) {
+              final rec = DeviceTrafficRecord.fromJson(
+                Map<String, dynamic>.from(item),
+              );
+              _perDeviceTraffic[rec.ip] = rec;
+            }
+          }
+          notifyListeners();
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveToPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _perDeviceTraffic.values.map((r) => r.toJson()).toList();
+      await prefs.setString(_storageKey, json.encode(list));
+    } catch (_) {}
+  }
+
   // ─── Recording ───────────────────────────────────────────────────────────
 
   /// Called when the Web Portal upload handler completes a file transfer.
@@ -56,6 +160,7 @@ class ObservedTraffic extends ChangeNotifier {
     required int bytes,
     required double speedBytesPerSec,
     required Duration duration,
+    String clientIp = 'Unknown',
   }) {
     _totalBytesReceived += bytes;
     _uploadCount += 1;
@@ -64,13 +169,30 @@ class ObservedTraffic extends ChangeNotifier {
     if (speedBytesPerSec > _peakSpeedBytesPerSec) {
       _peakSpeedBytesPerSec = speedBytesPerSec;
     }
+    if (clientIp != 'Unknown' && clientIp.isNotEmpty) {
+      final rec = _getOrCreate(clientIp);
+      rec.bytesReceived += bytes;
+      rec.filesReceivedCount += 1;
+      rec.lastActivity = DateTime.now();
+      unawaited(_saveToPrefs());
+    }
     notifyListeners();
   }
 
   /// Called when the Web Portal message handler receives a text message.
-  void recordWebMessage({required int bytes}) {
+  void recordWebMessage({
+    required int bytes,
+    String clientIp = 'Unknown',
+  }) {
     _totalBytesReceived += bytes;
     _messageCount += 1;
+    if (clientIp != 'Unknown' && clientIp.isNotEmpty) {
+      final rec = _getOrCreate(clientIp);
+      rec.bytesReceived += bytes;
+      rec.messageCount += 1;
+      rec.lastActivity = DateTime.now();
+      unawaited(_saveToPrefs());
+    }
     notifyListeners();
   }
 
@@ -79,6 +201,8 @@ class ObservedTraffic extends ChangeNotifier {
     required int bytes,
     required double speedBytesPerSec,
     required Duration duration,
+    String peerIp = 'Unknown',
+    bool isMessage = false,
   }) {
     _totalBytesReceived += bytes;
     _uploadCount += 1;
@@ -86,6 +210,38 @@ class ObservedTraffic extends ChangeNotifier {
     _lastTransferDuration = duration;
     if (speedBytesPerSec > _peakSpeedBytesPerSec) {
       _peakSpeedBytesPerSec = speedBytesPerSec;
+    }
+    if (peerIp != 'Unknown' && peerIp.isNotEmpty) {
+      final rec = _getOrCreate(peerIp);
+      rec.bytesReceived += bytes;
+      if (isMessage) {
+        rec.messageCount += 1;
+      } else {
+        rec.filesReceivedCount += 1;
+      }
+      rec.lastActivity = DateTime.now();
+      unawaited(_saveToPrefs());
+    }
+    notifyListeners();
+  }
+
+  /// Records outgoing bytes sent to [peerIp] via Hotspot Guardian.
+  void recordOutgoingTransfer({
+    required String peerIp,
+    required int bytes,
+    bool isMessage = false,
+  }) {
+    _totalBytesSent += bytes;
+    if (peerIp != 'Unknown' && peerIp.isNotEmpty) {
+      final rec = _getOrCreate(peerIp);
+      rec.bytesSent += bytes;
+      if (isMessage) {
+        rec.messageCount += 1;
+      } else {
+        rec.filesSentCount += 1;
+      }
+      rec.lastActivity = DateTime.now();
+      unawaited(_saveToPrefs());
     }
     notifyListeners();
   }
@@ -100,12 +256,10 @@ class ObservedTraffic extends ChangeNotifier {
   /// Adds to total bytes sent (response payloads).
   void recordSent(int bytes) {
     _totalBytesSent += bytes;
-    // No listener notification for small response payloads —
-    // avoids rebuilding the UI for every tiny JSON response.
   }
 
-  /// Resets all counters (e.g. at app restart or user action).
-  void reset() {
+  /// Resets all counters and wipes persisted per-device traffic.
+  Future<void> reset() async {
     _totalBytesReceived = 0;
     _totalBytesSent = 0;
     _messageCount = 0;
@@ -114,6 +268,11 @@ class ObservedTraffic extends ChangeNotifier {
     _lastSpeedBytesPerSec = 0;
     _peakSpeedBytesPerSec = 0;
     _lastTransferDuration = Duration.zero;
+    _perDeviceTraffic.clear();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_storageKey);
+    } catch (_) {}
     notifyListeners();
   }
 

@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 /// Provides the self-contained HTML/CSS/JavaScript client for the
 /// Hotspot Guardian Local Web Portal.
 ///

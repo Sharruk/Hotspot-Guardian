@@ -24,7 +24,7 @@ class ActiveClient {
   String mac;
 
   /// Reverse-DNS / NetBIOS hostname if resolved; `'Unknown'` otherwise.
-  final String hostname;
+  String hostname;
 
   /// When this device was first seen in the ARP table during this session.
   final DateTime firstSeen;

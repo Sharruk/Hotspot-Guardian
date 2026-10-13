@@ -20,7 +20,6 @@ import '../widgets/desktop_drop_region.dart';
 import '../v4/direct_connect/connect_router.dart';
 import '../v4/direct_connect/join_fallback_sheet.dart';
 import '../v4/v4.dart';
-import 'session_display.dart';
 
 const _uuid = Uuid();
 
@@ -668,27 +667,6 @@ class _SendPageState extends State<SendPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final state = context.watch<AppState>();
-    // Recents first (the device you always send to should be first —
-    // ShareIt/Quick Share convention), then alphabetical for the rest.
-    final lastUsed = <String, DateTime>{};
-    for (final s in state.sessions) {
-      final t = s.finishedAt ?? s.startedAt;
-      final prev = lastUsed[s.peer.fingerprint];
-      if (prev == null || t.isAfter(prev)) lastUsed[s.peer.fingerprint] = t;
-    }
-    final peers = state.peers.values.toList()
-      ..sort((a, b) {
-        final ta = lastUsed[a.fingerprint];
-        final tb = lastUsed[b.fingerprint];
-        if (ta != null && tb == null) return -1;
-        if (ta == null && tb != null) return 1;
-        if (ta != null && tb != null) {
-          final c = tb.compareTo(ta);
-          if (c != 0) return c;
-        }
-        return a.alias.toLowerCase().compareTo(b.alias.toLowerCase());
-      });
     final hasScanner =
         widget.scannerBuilder != null || SendPage.cameraSupported;
 
@@ -725,46 +703,7 @@ class _SendPageState extends State<SendPage> with WidgetsBindingObserver {
                     ),
                     const SizedBox(height: VSpace.x2),
                   ],
-                  Text('Nearby devices',
-                      style: VType.heading.copyWith(color: scheme.onSurface)),
-                  const SizedBox(height: VSpace.x1),
-                  Text(
-                    'Tap a device to choose files and send.',
-                    style:
-                        VType.caption.copyWith(color: scheme.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: VSpace.x4),
-                  DeviceRadar(
-                    peers: [
-                      for (final p in peers) radarPeerData(state.settings, p),
-                    ],
-                    // Real discovery state (perf S3): the radar's spinner
-                    // only animates while a sweep is actually in flight, so
-                    // an idle screen stops repainting every frame.
-                    searching: state.isScanning,
-                    // Don't promise a scanner on hosts without one.
-                    scanHintVisible: hasScanner,
-                    onHelp: () => Navigator.of(context).pushNamed('/help'),
-                    onPeerTap: (tapped) {
-                      if (_busy) return;
-                      // Resolve by fingerprint, never by display name:
-                      // aliases collide (or can be spoofed), and the peer
-                      // list mutates under a 6s discovery refresh. No match
-                      // => the device left; never fall back to an arbitrary
-                      // peer.
-                      final peer = state.peers[tapped.id];
-                      if (peer == null) {
-                        _showError('That device just went offline. '
-                            'Wait for it to reappear, then tap it again.');
-                        return;
-                      }
-                      unawaited(_sendTo(peer));
-                    },
-                  ),
-                  // Secondary action below the device list, not above it:
-                  // the list is what people came for.
                   if (_staged.isEmpty) ...[
-                    const SizedBox(height: VSpace.x2),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton.icon(
@@ -777,6 +716,7 @@ class _SendPageState extends State<SendPage> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
+                    const SizedBox(height: VSpace.x2),
                   ],
                   if (_connecting) ...[
                     const SizedBox(height: VSpace.x4),

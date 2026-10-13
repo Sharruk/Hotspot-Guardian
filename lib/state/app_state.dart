@@ -11,7 +11,6 @@ import '../core/discovery/subnet_scanner.dart';
 import '../core/history/transfer_history_store.dart';
 import '../core/models/active_client.dart';
 import '../core/monitoring/arp_scanner.dart';
-import '../core/monitoring/gateway_info.dart';
 import '../core/monitoring/observed_traffic.dart';
 import '../core/update/update_checker.dart';
 import '../core/models/device.dart';
@@ -108,6 +107,13 @@ class AppState extends ChangeNotifier {
   /// IP address that the Windows networking stack has a cached ARP entry for.
   final List<ActiveClient> _activeClients = [];
   List<ActiveClient> get activeClients => List.unmodifiable(_activeClients);
+
+  /// Full resolved ARP table from the Windows TCP/IP cache.
+  final Map<String, String> _arpTable = {};
+  Map<String, String> get arpTable => Map.unmodifiable(_arpTable);
+
+  /// Resolves the MAC address for [ip] from the local ARP cache.
+  String getMacForIp(String ip) => _arpTable[ip] ?? 'Unavailable';
 
   /// Observed traffic singleton — tracks only traffic handled by this app.
   ObservedTraffic get observedTraffic => ObservedTraffic.instance;
@@ -578,6 +584,8 @@ class AppState extends ChangeNotifier {
       const Duration(seconds: 15),
       (_) => state._prunePeers(),
     );
+    // Load persisted per-device traffic
+    await ObservedTraffic.instance.loadFromPrefs();
     // Phase 4A: Kick initial gateway + ARP detection after startup.
     // Runs asynchronously so it never delays app launch.
     unawaited(state.refreshNetworkMonitor());
@@ -707,7 +715,22 @@ class AppState extends ChangeNotifier {
 
       // 3. Read the full ARP table to find active subnet clients
       final arpTable = await ArpScanner.instance.readArpTable();
+      _arpTable
+        ..clear()
+        ..addAll(arpTable);
       _mergeArpClients(arpTable);
+
+      // Probe MAC for known peers if not yet in ARP table
+      for (final peer in _peers.values) {
+        if (peer.ip.isNotEmpty && !_arpTable.containsKey(peer.ip)) {
+          unawaited(resolveArpMac(peer.ip).then((mac) {
+            if (mac != null) {
+              _arpTable[peer.ip] = mac;
+              notifyListeners();
+            }
+          }));
+        }
+      }
     } finally {
       _monitorRefreshing = false;
       notifyListeners();
@@ -751,6 +774,15 @@ class AppState extends ChangeNotifier {
             firstSeen: now,
           );
           _activeClients.add(c);
+          // Non-blocking reverse DNS lookup for hostname
+          try {
+            InternetAddress(ip).reverse().then((resolved) {
+              if (resolved.host != ip && resolved.host.isNotEmpty) {
+                c.hostname = resolved.host;
+                notifyListeners();
+              }
+            }).catchError((_) {});
+          } catch (_) {}
           EventLog.instance.add(
             'Active client discovered: $ip (MAC: ${mac.toUpperCase()})',
             category: 'DISCOVERY',
@@ -1310,6 +1342,17 @@ class AppState extends ChangeNotifier {
             '$type $dir $peerAlias completed successfully',
             category: category,
           );
+          if (session.direction == TransferDirection.send) {
+            final sentBytes = session.files.values.fold<int>(
+              0,
+              (sum, fp) => sum + (fp.bytes > 0 ? fp.bytes : fp.file.size),
+            );
+            ObservedTraffic.instance.recordOutgoingTransfer(
+              peerIp: session.peer.ip,
+              bytes: sentBytes,
+              isMessage: isMessage,
+            );
+          }
         case TransferStatus.failed:
           logged = true;
           final error = session.files.values.firstOrNull?.error ?? 'connection interrupted';

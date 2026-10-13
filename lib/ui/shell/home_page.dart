@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/models/active_client.dart';
 import '../../core/models/device.dart';
 import '../../core/models/file_info.dart';
+import '../../core/models/session.dart';
 import '../../core/monitoring/observed_traffic.dart';
 import '../../core/platform/incoming_share.dart';
 import '../../core/platform/reveal_folder.dart';
@@ -64,6 +64,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _showSendMessageDialog(BuildContext context, Device peer) async {
     final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
     final ctrl = TextEditingController();
     final message = await showDialog<String>(
       context: context,
@@ -116,13 +117,34 @@ class _HomePageState extends State<HomePage> {
 
     if (message != null && message.trim().isNotEmpty && mounted) {
       final session = await state.sendTextMessage(peer: peer, message: message);
-      if (session != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+      if (session != null) {
+        messenger.showSnackBar(
           SnackBar(
             content: Text('Message dispatched to ${peer.alias} (${peer.ip})'),
             duration: const Duration(seconds: 2),
           ),
         );
+        session.addListener(() {
+          if (session.status == TransferStatus.completed) {
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text('Message delivered to ${peer.alias}'),
+                backgroundColor: Colors.green.shade700,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          } else if (session.status == TransferStatus.failed) {
+            final err = session.files.values.firstOrNull?.error ??
+                'Connection timed out or target unreachable';
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text('Failed to deliver message to ${peer.alias}: $err'),
+                backgroundColor: Colors.red.shade700,
+                duration: const Duration(seconds: 4),
+              ),
+            );
+          }
+        });
       }
     }
   }
@@ -582,9 +604,12 @@ class _HomePageState extends State<HomePage> {
           children: [
             Icon(icon, size: 14, color: scheme.onSurfaceVariant),
             const SizedBox(width: 4),
-            Text(
-              title,
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -605,6 +630,8 @@ class _HomePageState extends State<HomePage> {
     required List<Device> peers,
   }) {
     final activeClients = state.activeClients;
+    final isBusy = state.isScanning || state.isMonitorRefreshing;
+
     return Card(
       elevation: 0,
       color: scheme.surfaceContainerLow,
@@ -622,34 +649,90 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Icon(Icons.devices, size: 20, color: scheme.primary),
                 const SizedBox(width: 8),
-                Text(
-                  'DEVICES ON HOTSPOT',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8,
-                    color: scheme.onSurfaceVariant,
+                Expanded(
+                  child: Text(
+                    'CONNECTED HOTSPOT DEVICES',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.8,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: isBusy
+                      ? null
+                      : () => unawaited(state.refreshDiscovery(userInitiated: true)),
+                  icon: isBusy
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh, size: 14),
+                  label: Text(
+                    isBusy ? 'Scanning...' : 'Refresh',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 6),
                 TextButton.icon(
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const SendPage()),
                   ),
-                  icon: const Icon(Icons.search, size: 16),
-                  label: const Text('Direct Link / Radar'),
+                  icon: const Icon(Icons.link, size: 15),
+                  label: const Text('Direct Link', style: TextStyle(fontSize: 12)),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            // Limitation explanation banner
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, size: 14, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Mobile hotspot gateways do not expose connected-client DHCP lists to Wi-Fi clients. '
+                      'Devices below are observed via Windows ARP/neighbour cache and active protocol probes. '
+                      'Total WAN/Internet usage is only measurable at the gateway router.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const Divider(height: 20),
 
-            // ─── TIER 1: Hotspot Guardian Peers ──────────────────────────
+            // ─── TIER 1: Compatible Hotspot Guardian Receivers ─────────────
             Row(
               children: [
                 const Icon(Icons.shield_outlined, size: 15),
                 const SizedBox(width: 6),
                 Text(
-                  'HOTSPOT GUARDIAN DEVICES  (${peers.length})',
+                  'COMPATIBLE HOTSPOT GUARDIAN RECEIVERS (${peers.length})',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
@@ -659,16 +742,16 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             Text(
-              'Running or accessing Hotspot Guardian — full messaging & file transfer available.',
+              'Devices running Hotspot Guardian receiver — messaging and file transfer supported.',
               style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 10),
             if (peers.isEmpty)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerLowest,
                   borderRadius: BorderRadius.circular(12),
@@ -676,16 +759,16 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.wifi_find, size: 32, color: scheme.onSurfaceVariant),
+                    Icon(Icons.wifi_find, size: 28, color: scheme.onSurfaceVariant),
                     const SizedBox(height: 8),
                     const Text(
-                      'No Hotspot Guardian Devices Discovered Yet',
+                      'No Compatible Receivers Discovered Yet',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Scanning subnet (${state.networkInfo?.subnet ?? "192.168.43.0/24"}) & listening to UDP multicast.\n'
-                      'Other devices must be running LanLink / Hotspot Guardian or using the Web Portal.',
+                      'Scanning subnet (${state.networkInfo?.subnet ?? "192.168.43.0/24"}) & listening for UDP announcements.\n'
+                      'Other devices must run Hotspot Guardian or open the Web Portal.',
                       style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                       textAlign: TextAlign.center,
                     ),
@@ -702,137 +785,193 @@ class _HomePageState extends State<HomePage> {
                   final peer = peers[index];
                   final latency = state.getLatencyFor(peer.fingerprint);
                   final formattedLatency = latency != null ? '$latency ms' : 'N/A';
+                  final mac = state.getMacForIp(peer.ip);
+                  final traffic = ObservedTraffic.instance.getRecordForIp(peer.ip);
+                  final lastSeen = state.getLastSeenFor(peer.fingerprint);
+                  final lastSeenText = lastSeen != null
+                      ? _formatRelativeTime(lastSeen)
+                      : 'Active';
 
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     decoration: BoxDecoration(
                       color: scheme.surfaceContainerLowest,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: scheme.outlineVariant.withOpacity(0.5)),
                     ),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: scheme.primaryContainer,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            peer.deviceType == 'mobile' ? Icons.phone_android : Icons.laptop,
-                            size: 20,
-                            color: scheme.onPrimaryContainer,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                        Row(
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: scheme.primaryContainer,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                peer.deviceType == 'mobile'
+                                    ? Icons.phone_android
+                                    : Icons.laptop,
+                                size: 20,
+                                color: scheme.onPrimaryContainer,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    peer.alias,
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                  ),
-                                  if (peer.verified) ...[
-                                    const SizedBox(width: 6),
-                                    Icon(Icons.verified, size: 16, color: scheme.primary),
-                                  ],
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: latency != null
-                                          ? Colors.green.withOpacity(0.15)
-                                          : Colors.amber.withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          width: 6,
-                                          height: 6,
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            color: latency != null ? Colors.green : Colors.amber.shade800,
-                                          ),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        peer.alias,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
                                         ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          latency != null ? 'ONLINE' : 'UNREACHABLE',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                            color: latency != null ? Colors.green.shade800 : Colors.amber.shade900,
-                                          ),
-                                        ),
+                                      ),
+                                      if (peer.verified) ...[
+                                        const SizedBox(width: 6),
+                                        Icon(Icons.verified, size: 16, color: scheme.primary),
                                       ],
-                                    ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: latency != null
+                                              ? Colors.green.withOpacity(0.15)
+                                              : Colors.amber.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Container(
+                                              width: 6,
+                                              height: 6,
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: latency != null
+                                                    ? Colors.green
+                                                    : Colors.amber.shade800,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              latency != null ? 'ONLINE' : 'UNREACHABLE',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                                color: latency != null
+                                                    ? Colors.green.shade800
+                                                    : Colors.amber.shade900,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'IPv4: ${peer.ip}:${peer.port}  •  MAC: ${mac.toUpperCase()}  •  ${peer.deviceModel.isNotEmpty ? peer.deviceModel : peer.deviceType}',
+                                    style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'IP: ${peer.ip}:${peer.port}  •  ${peer.deviceModel.isNotEmpty ? peer.deviceModel : peer.deviceType}',
-                                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                            ),
+                            // Latency
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: scheme.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(8),
                               ),
-                            ],
-                          ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.speed,
+                                    size: 14,
+                                    color: latency != null && latency < 50
+                                        ? Colors.green
+                                        : Colors.amber.shade800,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    formattedLatency,
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(width: 2),
+                                  InkWell(
+                                    onTap: () => unawaited(state.measurePeerLatency(peer)),
+                                    child: const Icon(Icons.refresh, size: 14),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            // Send Message Action
+                            FilledButton.tonalIcon(
+                              onPressed: () => _showSendMessageDialog(context, peer),
+                              icon: const Icon(Icons.chat_bubble_outline, size: 14),
+                              label: const Text('Send Message', style: TextStyle(fontSize: 12)),
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                minimumSize: Size.zero,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            // Send File Action
+                            OutlinedButton.icon(
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => SendPage(targetPeer: peer),
+                                ),
+                              ),
+                              icon: const Icon(Icons.upload_file, size: 14),
+                              label: const Text('Send File', style: TextStyle(fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                minimumSize: Size.zero,
+                              ),
+                            ),
+                          ],
                         ),
-                        // Latency
+                        const SizedBox(height: 8),
+                        // Data usage & Last seen row
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
+                            color: scheme.surfaceContainerHighest.withOpacity(0.35),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           child: Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(
-                                Icons.speed,
-                                size: 14,
-                                color: latency != null && latency < 50 ? Colors.green : Colors.amber.shade800,
+                              Icon(Icons.data_usage, size: 14, color: scheme.primary),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Observed App Data: ${traffic.totalMBFormatted} '
+                                  '(${traffic.totalBytes > 0 ? '${ObservedTraffic.formatBytes(traffic.bytesReceived)} Rx / ${ObservedTraffic.formatBytes(traffic.bytesSent)} Tx' : 'No app traffic'})'
+                                  '  •  Total WAN: Not measurable',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: scheme.onSurface,
+                                  ),
+                                ),
                               ),
+                              Icon(Icons.access_time, size: 13, color: scheme.onSurfaceVariant),
                               const SizedBox(width: 4),
                               Text(
-                                formattedLatency,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(width: 2),
-                              InkWell(
-                                onTap: () => unawaited(state.measurePeerLatency(peer)),
-                                child: const Icon(Icons.refresh, size: 14),
+                                'Last seen: $lastSeenText',
+                                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                               ),
                             ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        // Action Buttons: only for Hotspot Guardian peers
-                        OutlinedButton.icon(
-                          onPressed: () => _showSendMessageDialog(context, peer),
-                          icon: const Icon(Icons.chat_bubble_outline, size: 14),
-                          label: const Text('Msg', style: TextStyle(fontSize: 12)),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            minimumSize: Size.zero,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        FilledButton.tonalIcon(
-                          onPressed: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => SendPage(targetPeer: peer),
-                            ),
-                          ),
-                          icon: const Icon(Icons.upload_file, size: 14),
-                          label: const Text('Send File', style: TextStyle(fontSize: 12)),
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            minimumSize: Size.zero,
                           ),
                         ),
                       ],
@@ -841,7 +980,7 @@ class _HomePageState extends State<HomePage> {
                 },
               ),
 
-            // ─── TIER 2: Discovered Hotspot Clients (ARP) ────────────────
+            // ─── TIER 2: Observed Local Network Devices (ARP) ───────────────
             const SizedBox(height: 20),
             const Divider(height: 1),
             const SizedBox(height: 16),
@@ -850,7 +989,7 @@ class _HomePageState extends State<HomePage> {
                 const Icon(Icons.manage_search, size: 15),
                 const SizedBox(width: 6),
                 Text(
-                  'DISCOVERED HOTSPOT CLIENTS  (${activeClients.length})',
+                  'OBSERVED LOCAL NETWORK DEVICES (${activeClients.length})',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
@@ -869,7 +1008,7 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Observed via ARP/neighbour table — IP/MAC only. NOT guaranteed to be all hotspot devices.',
+              'Devices observed on local subnet via Windows ARP/neighbour cache — IP/MAC observed, no receiver detected.',
               style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 10),
@@ -891,124 +1030,142 @@ class _HomePageState extends State<HomePage> {
                 ),
               )
             else
-              _buildArpClientsTable(context, clients: activeClients, scheme: scheme),
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: activeClients.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final client = activeClients[index];
+                  final clientTraffic = ObservedTraffic.instance.getRecordForIp(client.ip);
+                  final hasTraffic = clientTraffic.totalBytes > 0;
+
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerLowest,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.devices_other, size: 18, color: scheme.onSurfaceVariant),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        client.hostname != 'Unknown'
+                                            ? client.hostname
+                                            : 'Device (${client.ip})',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: client.isOnline
+                                              ? Colors.blue.withOpacity(0.12)
+                                              : Colors.grey.withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          client.isOnline ? 'OBSERVED (ARP)' : 'OFFLINE',
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                            color: client.isOnline ? Colors.blue.shade800 : Colors.grey.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'IPv4: ${client.ip}  •  MAC: ${client.macDisplay}  •  Hostname: ${client.hostname}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontFamily: 'monospace',
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Communication status
+                            Tooltip(
+                              message: 'Messaging requires a device running Hotspot Guardian receiver',
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: scheme.surfaceContainerHighest.withOpacity(0.5),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.block, size: 12, color: scheme.onSurfaceVariant),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Messaging Unsupported',
+                                      style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        // Data usage & Last seen row
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest.withOpacity(0.25),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.data_usage, size: 13, color: scheme.onSurfaceVariant),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  hasTraffic
+                                      ? 'Observed Web Portal: ${clientTraffic.totalMBFormatted} (${ObservedTraffic.formatBytes(clientTraffic.bytesReceived)} Rx / ${ObservedTraffic.formatBytes(clientTraffic.bytesSent)} Tx)  •  Total WAN: Not measurable'
+                                      : '0.00 MB (Observed App)  •  Total WAN: Not measurable (Gateway managed)',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                              Icon(Icons.access_time, size: 12, color: scheme.onSurfaceVariant),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Last seen: ${client.lastSeenRelative}',
+                                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildArpClientsTable(
-    BuildContext context, {
-    required List<ActiveClient> clients,
-    required ColorScheme scheme,
-  }) {
-    return Table(
-      columnWidths: const {
-        0: FlexColumnWidth(2),
-        1: FlexColumnWidth(3),
-        2: FlexColumnWidth(2),
-        3: FlexColumnWidth(1.5),
-      },
-      children: [
-        TableRow(
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHigh.withOpacity(0.5),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          ),
-          children: [
-            _tableHeader('IP ADDRESS', scheme),
-            _tableHeader('MAC ADDRESS', scheme),
-            _tableHeader('STATUS', scheme),
-            _tableHeader('LAST SEEN', scheme),
-          ],
-        ),
-        for (final client in clients)
-          TableRow(
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: scheme.outlineVariant.withOpacity(0.2)),
-              ),
-            ),
-            children: [
-              _tableCell(
-                child: Row(
-                  children: [
-                    Icon(Icons.devices_other, size: 13, color: scheme.onSurfaceVariant),
-                    const SizedBox(width: 4),
-                    Text(
-                      client.ip,
-                      style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-                    ),
-                  ],
-                ),
-              ),
-              _tableCell(
-                child: Text(
-                  client.macDisplay,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: client.mac == 'Unavailable'
-                        ? scheme.onSurfaceVariant
-                        : scheme.onSurface,
-                  ),
-                ),
-              ),
-              _tableCell(
-                child: Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: client.isOnline ? Colors.green : Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      client.isOnline ? 'Discovered' : 'Offline',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: client.isOnline ? Colors.green.shade800 : scheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _tableCell(
-                child: Text(
-                  client.lastSeenRelative,
-                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
-  }
-
-  Widget _tableHeader(String label, ColorScheme scheme) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.5,
-          color: scheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-
-  Widget _tableCell({required Widget child}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: child,
     );
   }
 
@@ -1048,7 +1205,7 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                     TextButton.icon(
-                      onPressed: t.reset,
+                      onPressed: () => unawaited(t.reset()),
                       icon: const Icon(Icons.restart_alt, size: 14),
                       label: const Text('Reset', style: TextStyle(fontSize: 12)),
                     ),
@@ -1093,7 +1250,7 @@ class _HomePageState extends State<HomePage> {
                     Expanded(
                       child: _buildTrafficStat(
                         icon: Icons.upload_outlined,
-                        label: 'Total Sent (Resp.)',
+                        label: 'Total Sent',
                         value: ObservedTraffic.formatBytes(t.totalBytesSent),
                         color: Colors.teal,
                         scheme: scheme,
@@ -1373,6 +1530,15 @@ class _HomePageState extends State<HomePage> {
   String _formatTime(DateTime dt) {
     final two = (int n) => n.toString().padLeft(2, '0');
     return '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  String _formatRelativeTime(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 10) return 'Just now';
+    if (diff.inSeconds < 60) return '${diff.inSeconds}s ago';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
   }
 }
 
