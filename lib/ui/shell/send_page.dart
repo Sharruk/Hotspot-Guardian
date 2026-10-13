@@ -894,6 +894,29 @@ class _DirectLinkField extends StatelessWidget {
           "Type the address shown on the other device's Receive screen.",
           style: VType.caption.copyWith(color: scheme.onSurfaceVariant),
         ),
+        const SizedBox(height: VSpace.x3),
+        Container(
+          padding: const EdgeInsets.all(VSpace.x3),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 16, color: scheme.primary),
+              const SizedBox(width: VSpace.x2),
+              Expanded(
+                child: Text(
+                  'No app on the other device? Other users do not need to download Hotspot Guardian. '
+                  'They can simply reside in the Web Portal link in their browser to chat and receive/send files.',
+                  style: VType.caption.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }

@@ -355,15 +355,26 @@ class WebPortal {
       </button>
     </div>
 
-    <!-- 2. MESSAGE CARD -->
+    <!-- 2. LIVE CHAT & MESSAGING CARD -->
     <div class="card">
       <div class="card-header">
-        <span class="card-title">💬 Send Message to Laptop</span>
+        <span class="card-title">💬 Live Hotspot Chat & Messaging</span>
+        <span style="font-size: 11px; color: var(--success); display: flex; align-items: center; gap: 4px;">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block;"></span>
+          Two-way live
+        </span>
       </div>
-      <textarea id="msgInput" placeholder="Type a text message to send over the hotspot network..."></textarea>
-      <button class="btn" id="sendMsgBtn" onclick="sendMessage()">
-        <span>📤</span> Send Message
-      </button>
+      <div class="chat-feed" id="chatFeed" style="max-height: 220px; min-height: 100px; overflow-y: auto; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
+        <div style="font-size: 12px; color: var(--text-muted); text-align: center; font-style: italic;" id="chatEmpty">
+          No messages yet. Send a message to start chatting with the host laptop!
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <input type="text" id="msgInput" placeholder="Type a message to host laptop..." style="flex: 1; padding: 10px 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; font-size: 13px;" onkeydown="if(event.key==='Enter') sendMessage()">
+        <button class="btn" id="sendMsgBtn" style="padding: 10px 16px; width: auto; margin-top: 0;" onclick="sendMessage()">
+          Send
+        </button>
+      </div>
     </div>
 
     <!-- 3. FILE TRANSFER CARD -->
@@ -488,6 +499,38 @@ class WebPortal {
       }
     }
 
+    let lastMsgCount = -1;
+    async function fetchMessages() {
+      try {
+        const res = await fetch('/api/hotspot/messages', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.messages) return;
+        const feed = document.getElementById('chatFeed');
+        if (data.messages.length === 0) {
+          feed.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); text-align: center; font-style: italic;">No messages yet. Send a message to start chatting with the host laptop!</div>';
+          return;
+        }
+        if (data.messages.length !== lastMsgCount) {
+          lastMsgCount = data.messages.length;
+          feed.innerHTML = '';
+          data.messages.forEach(m => {
+            const isHost = m.isFromHost;
+            const item = document.createElement('div');
+            item.style.cssText = isHost
+              ? 'align-self: flex-start; background: #1e293b; border: 1px solid #334155; padding: 7px 11px; border-radius: 10px 10px 10px 2px; max-width: 85%; font-size: 13px;'
+              : 'align-self: flex-end; background: #2563eb; color: #fff; padding: 7px 11px; border-radius: 10px 10px 2px 10px; max-width: 85%; font-size: 13px;';
+            const senderTag = isHost
+              ? `<span style="font-weight: 700; color: #60a5fa; font-size: 11px; display: block; margin-bottom: 2px;">💻 Host (\${m.senderAlias || 'Laptop'}) • \${m.time || ''}</span>`
+              : `<span style="font-weight: 700; color: #93c5fd; font-size: 11px; display: block; margin-bottom: 2px;">📱 \${m.sender === 'Web Client' ? 'You' : m.sender} • \${m.time || ''}</span>`;
+            item.innerHTML = `\${senderTag}<div>\${m.text}</div>`;
+            feed.appendChild(item);
+          });
+          feed.scrollTop = feed.scrollHeight;
+        }
+      } catch (_) {}
+    }
+
     async function sendMessage() {
       const input = document.getElementById('msgInput');
       const text = input.value.trim();
@@ -509,7 +552,7 @@ class WebPortal {
         if (res.ok && data.success) {
           addLog('MESSAGE', `Sent: "\${text}"`, 'success');
           input.value = '';
-          alert('✅ Message delivered to Windows Hotspot Guardian!');
+          await fetchMessages();
         } else {
           addLog('MESSAGE', `Failed to deliver message: \${data.error || 'Server error'}`, 'error');
           alert('❌ Delivery failed: ' + (data.error || 'Unknown error'));
@@ -519,7 +562,7 @@ class WebPortal {
         alert('❌ Error: ' + err.message);
       } finally {
         btn.disabled = false;
-        btn.innerHTML = '<span>📤</span> Send Message';
+        btn.innerText = 'Send';
       }
     }
 
@@ -625,9 +668,11 @@ class WebPortal {
       xhr.send(file);
     }
 
-    // Auto-ping on load
+    // Auto-ping and load chat on load
     window.addEventListener('DOMContentLoaded', () => {
       setTimeout(testPing, 600);
+      fetchMessages();
+      setInterval(fetchMessages, 2500);
     });
   </script>
 </body>

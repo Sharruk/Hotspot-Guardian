@@ -43,6 +43,39 @@ typedef AcceptHandler = Future<AcceptDecision> Function(
 /// Signature called when a new active receive session is created.
 typedef SessionStartedHandler = void Function(TransferSession session);
 
+/// Chat message exchanged through the Web Portal.
+class PortalChatMessage {
+  PortalChatMessage({
+    required this.id,
+    required this.sender,
+    required this.senderAlias,
+    required this.text,
+    required this.timestamp,
+    this.targetIp,
+    this.isFromHost = false,
+  });
+
+  final String id;
+  final String sender;
+  final String senderAlias;
+  final String text;
+  final DateTime timestamp;
+  final String? targetIp;
+  final bool isFromHost;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'sender': sender,
+        'senderAlias': senderAlias,
+        'text': text,
+        'time':
+            '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}:${timestamp.second.toString().padLeft(2, '0')}',
+        'timestamp': timestamp.toIso8601String(),
+        'targetIp': targetIp,
+        'isFromHost': isFromHost,
+      };
+}
+
 /// Hosts the HTTP server and turns LocalSend-protocol requests into
 /// [TransferSession]s. The class itself does not own UI state — instead,
 /// it calls back to the `onAccept` and `onSessionStarted` handlers it's
@@ -133,6 +166,27 @@ class Receiver {
   bool get isRunning => _httpServer != null;
   int? get port => _httpServer?.port;
 
+  /// Web portal live chat messages.
+  final List<PortalChatMessage> _portalMessages = [];
+  List<PortalChatMessage> get portalMessages => List.unmodifiable(_portalMessages);
+
+  /// Broadcasts or sends a chat message from the host to the Web Portal.
+  void broadcastPortalMessage({required String text, String? targetIp}) {
+    final msg = PortalChatMessage(
+      id: _uuid.v4(),
+      sender: 'Host',
+      senderAlias: localDeviceProvider().alias,
+      text: text,
+      timestamp: DateTime.now(),
+      targetIp: targetIp,
+      isFromHost: true,
+    );
+    _portalMessages.add(msg);
+    if (_portalMessages.length > 50) {
+      _portalMessages.removeAt(0);
+    }
+  }
+
   Future<void> start() async {
     if (_httpServer != null) return;
 
@@ -140,6 +194,7 @@ class Receiver {
       ..get('/', _handleWebIndex)
       ..get('/index.html', _handleWebIndex)
       ..get('/api/hotspot/status', _handleWebStatus)
+      ..get('/api/hotspot/messages', _handleGetWebMessages)
       ..post('/api/hotspot/message', _handleWebMessage)
       ..post('/api/hotspot/upload', _handleWebUpload)
       ..get(LanLinkProtocol.routeInfo, _handleInfo)
@@ -282,6 +337,7 @@ class Receiver {
         req.context['shelf.io.connection_info'] as HttpConnectionInfo?;
     final clientIp = connInfo?.remoteAddress.address ?? 'Client';
     EventLog.instance.add('Web client connected ($clientIp)', category: 'NETWORK');
+    ObservedTraffic.instance.recordWebVisit(clientIp);
     final html = WebPortal.buildHtml(
       hostAlias: me.alias,
       serverIp: me.ip.isNotEmpty ? me.ip : '127.0.0.1',
@@ -299,6 +355,10 @@ class Receiver {
 
   Response _handleWebStatus(Request req) {
     final me = localDeviceProvider();
+    final connInfo =
+        req.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+    final clientIp = connInfo?.remoteAddress.address ?? 'Client';
+    ObservedTraffic.instance.recordWebVisit(clientIp);
     return Response.ok(
       json.encode({
         'status': 'connected',
@@ -310,6 +370,20 @@ class Receiver {
       }),
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      },
+    );
+  }
+
+  Response _handleGetWebMessages(Request req) {
+    return Response.ok(
+      json.encode({
+        'success': true,
+        'messages': _portalMessages.map((m) => m.toJson()).toList(),
+      }),
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Access-Control-Allow-Origin': '*',
       },
     );
@@ -363,6 +437,20 @@ class Receiver {
       bytes: message.length,
       clientIp: clientIp,
     );
+
+    // Add to in-memory portal chat messages feed
+    final clientMsg = PortalChatMessage(
+      id: _uuid.v4(),
+      sender: clientIp,
+      senderAlias: 'Device ($clientIp)',
+      text: message,
+      timestamp: DateTime.now(),
+      isFromHost: false,
+    );
+    _portalMessages.add(clientMsg);
+    if (_portalMessages.length > 50) {
+      _portalMessages.removeAt(0);
+    }
 
     return Response.ok(
       json.encode({

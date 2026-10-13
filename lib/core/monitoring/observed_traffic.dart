@@ -179,6 +179,21 @@ class ObservedTraffic extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Called when a client visits or interacts with the Web Portal interface.
+  void recordWebVisit(String clientIp) {
+    if (clientIp != 'Unknown' && clientIp.isNotEmpty && clientIp != 'Client') {
+      final rec = _getOrCreate(clientIp);
+      rec.lastActivity = DateTime.now();
+      unawaited(_saveToPrefs());
+      notifyListeners();
+    }
+  }
+
+  /// Whether [ip] has visited the Web Portal or exchanged traffic.
+  bool isWebPortalClient(String ip) {
+    return _perDeviceTraffic.containsKey(ip);
+  }
+
   /// Called when the Web Portal message handler receives a text message.
   void recordWebMessage({
     required int bytes,

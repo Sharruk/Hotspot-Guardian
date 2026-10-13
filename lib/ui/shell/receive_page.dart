@@ -369,6 +369,32 @@ class _ReceivePageState extends State<ReceivePage> with WidgetsBindingObserver {
             },
           ),
         ),
+        const SizedBox(height: VSpace.x4),
+        Text(
+          'Or open the Web Portal in any browser (no app required):',
+          style: VType.caption.copyWith(color: scheme.onSurfaceVariant),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: VSpace.x2),
+        Center(
+          child: ActionChip(
+            avatar: Icon(Icons.language, size: 16, color: scheme.primary),
+            label: Text(
+              'https://${payload.hostPort}/',
+              style: VType.bodyStrong.copyWith(color: scheme.primary),
+            ),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              await Clipboard.setData(ClipboardData(text: 'https://${payload.hostPort}/'));
+              messenger
+                ..hideCurrentSnackBar()
+                ..showSnackBar(const SnackBar(
+                  content: Text('Web Portal URL copied to clipboard'),
+                  duration: Duration(seconds: 2),
+                ));
+            },
+          ),
+        ),
       ],
     ];
   }

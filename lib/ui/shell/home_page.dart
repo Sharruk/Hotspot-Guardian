@@ -149,6 +149,88 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _showSendPortalMessageDialog(
+    BuildContext context,
+    String? targetIp,
+    String displayName,
+  ) async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final ctrl = TextEditingController();
+    final message = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.forum_outlined, size: 22, color: Colors.blue),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                targetIp != null
+                    ? 'Message to $displayName'
+                    : 'Broadcast to Web Portal',
+                style: const TextStyle(fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              targetIp != null
+                  ? 'Target: $targetIp (Delivered live to Web Portal chat)'
+                  : 'Delivered to all active Web Portal clients on the hotspot.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                hintText: 'Type text message for the Web Portal live chat...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text),
+            icon: const Icon(Icons.send, size: 16),
+            label: const Text('Send to Portal'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+
+    if (message != null && message.trim().isNotEmpty && mounted) {
+      state.sendPortalMessage(text: message.trim(), targetIp: targetIp);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            targetIp != null
+                ? 'Message delivered to $displayName ($targetIp) via Web Portal!'
+                : 'Message broadcast to all Web Portal clients!',
+          ),
+          backgroundColor: Colors.green.shade700,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -630,6 +712,7 @@ class _HomePageState extends State<HomePage> {
     required List<Device> peers,
   }) {
     final activeClients = state.activeClients;
+    final nonPeerClients = activeClients.where((c) => !peers.any((p) => p.ip == c.ip)).toList();
     final isBusy = state.isScanning || state.isMonitorRefreshing;
 
     return Card(
@@ -637,7 +720,7 @@ class _HomePageState extends State<HomePage> {
       color: scheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: scheme.outlineVariant.withOpacity(0.6)),
+        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -651,7 +734,7 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'CONNECTED HOTSPOT DEVICES',
+                    'CONNECTED HOTSPOT DEVICES (${peers.length + nonPeerClients.length})',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
@@ -676,6 +759,16 @@ class _HomePageState extends State<HomePage> {
                     isBusy ? 'Scanning...' : 'Refresh',
                     style: const TextStyle(fontSize: 12),
                   ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton.icon(
+                  onPressed: () => _showSendPortalMessageDialog(context, null, 'All Web Portal Devices'),
+                  icon: const Icon(Icons.forum_outlined, size: 14),
+                  label: const Text('Portal Chat', style: TextStyle(fontSize: 12)),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                     visualDensity: VisualDensity.compact,
@@ -726,56 +819,73 @@ class _HomePageState extends State<HomePage> {
             ),
             const Divider(height: 20),
 
-            // ─── TIER 1: Compatible Hotspot Guardian Receivers ─────────────
-            Row(
-              children: [
-                const Icon(Icons.shield_outlined, size: 15),
-                const SizedBox(width: 6),
-                Text(
-                  'COMPATIBLE HOTSPOT GUARDIAN RECEIVERS (${peers.length})',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Devices running Hotspot Guardian receiver — messaging and file transfer supported.',
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 10),
-            if (peers.isEmpty)
+            if (peers.isEmpty && nonPeerClients.isEmpty)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: scheme.surfaceContainerLowest,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+                  border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.wifi_find, size: 28, color: scheme.onSurfaceVariant),
-                    const SizedBox(height: 8),
+                    Icon(Icons.wifi_tethering, size: 36, color: scheme.primary),
+                    const SizedBox(height: 10),
                     const Text(
-                      'No Compatible Receivers Discovered Yet',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                      'Waiting for Hotspot Clients to Connect',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 6),
                     Text(
-                      'Scanning subnet (${state.networkInfo?.subnet ?? "192.168.43.0/24"}) & listening for UDP announcements.\n'
-                      'Other devices must run Hotspot Guardian or open the Web Portal.',
-                      style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                      'Connect phones or other laptops to this Wi-Fi hotspot.\n'
+                      'Connected devices do not need to download an app — they can open the Web Portal in any browser:',
+                      style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                       textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: scheme.primaryContainer.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SelectableText(
+                        'https://${state.networkInfo?.ipAddress ?? (state.localIps.isNotEmpty ? state.localIps.first : "127.0.0.1")}:${state.port ?? state.settings.port}/',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: scheme.primary,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
                     ),
                   ],
                 ),
-              )
-            else
+              ),
+
+            if (peers.isNotEmpty) ...[
+              Row(
+                children: [
+                  const Icon(Icons.shield_outlined, size: 15),
+                  const SizedBox(width: 6),
+                  Text(
+                    'COMPATIBLE HOTSPOT GUARDIAN RECEIVERS (${peers.length})',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Devices running Hotspot Guardian receiver — messaging and file transfer supported.',
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 10),
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
@@ -979,80 +1089,77 @@ class _HomePageState extends State<HomePage> {
                   );
                 },
               ),
+            ],
 
-            // ─── TIER 2: Observed Local Network Devices (ARP) ───────────────
-            const SizedBox(height: 20),
-            const Divider(height: 1),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const Icon(Icons.manage_search, size: 15),
-                const SizedBox(width: 6),
-                Text(
-                  'OBSERVED LOCAL NETWORK DEVICES (${activeClients.length})',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const Spacer(),
-                if (state.isMonitorRefreshing)
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
+            if (nonPeerClients.isNotEmpty) ...[
+              if (peers.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                const Divider(height: 1),
+                const SizedBox(height: 14),
               ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Devices observed on local subnet via Windows ARP/neighbour cache — IP/MAC observed, no receiver detected.',
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 10),
-            if (activeClients.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
-                ),
-                child: Text(
-                  state.isMonitorRefreshing
-                      ? 'Scanning ARP table...'
-                      : 'No additional devices in ARP cache yet.\nPress Refresh to rescan.',
-                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-                  textAlign: TextAlign.center,
-                ),
-              )
-            else
+              Row(
+                children: [
+                  const Icon(Icons.devices, size: 15),
+                  const SizedBox(width: 6),
+                  Text(
+                    'CONNECTED HOTSPOT & WEB PORTAL USERS (${nonPeerClients.length})',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (state.isMonitorRefreshing)
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Connected devices on Wi-Fi hotspot — can reside in the Web Portal link without downloading any app.',
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 10),
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: activeClients.length,
+                itemCount: nonPeerClients.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
-                  final client = activeClients[index];
+                  final client = nonPeerClients[index];
                   final clientTraffic = ObservedTraffic.instance.getRecordForIp(client.ip);
+                  final isWebClient = ObservedTraffic.instance.isWebPortalClient(client.ip);
                   final hasTraffic = clientTraffic.totalBytes > 0;
+                  final displayName = client.hostname != 'Unknown'
+                      ? client.hostname
+                      : 'Device (${client.ip})';
 
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
                       color: scheme.surfaceContainerLowest,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+                      border: Border.all(
+                        color: isWebClient
+                            ? Colors.blue.withValues(alpha: 0.5)
+                            : scheme.outlineVariant.withValues(alpha: 0.4),
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.devices_other, size: 18, color: scheme.onSurfaceVariant),
+                            Icon(
+                              isWebClient ? Icons.language : Icons.devices_other,
+                              size: 18,
+                              color: isWebClient ? Colors.blue : scheme.onSurfaceVariant,
+                            ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(
@@ -1061,9 +1168,7 @@ class _HomePageState extends State<HomePage> {
                                   Row(
                                     children: [
                                       Text(
-                                        client.hostname != 'Unknown'
-                                            ? client.hostname
-                                            : 'Device (${client.ip})',
+                                        displayName,
                                         style: const TextStyle(
                                           fontWeight: FontWeight.bold,
                                           fontSize: 13,
@@ -1073,17 +1178,25 @@ class _HomePageState extends State<HomePage> {
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                         decoration: BoxDecoration(
-                                          color: client.isOnline
-                                              ? Colors.blue.withOpacity(0.12)
-                                              : Colors.grey.withOpacity(0.12),
+                                          color: isWebClient
+                                              ? Colors.blue.withValues(alpha: 0.15)
+                                              : (client.isOnline
+                                                  ? Colors.teal.withValues(alpha: 0.12)
+                                                  : Colors.grey.withValues(alpha: 0.12)),
                                           borderRadius: BorderRadius.circular(6),
                                         ),
                                         child: Text(
-                                          client.isOnline ? 'OBSERVED (ARP)' : 'OFFLINE',
+                                          isWebClient
+                                              ? 'WEB PORTAL (Active)'
+                                              : (client.isOnline ? 'HOTSPOT (ARP)' : 'OFFLINE'),
                                           style: TextStyle(
                                             fontSize: 9,
                                             fontWeight: FontWeight.bold,
-                                            color: client.isOnline ? Colors.blue.shade800 : Colors.grey.shade700,
+                                            color: isWebClient
+                                                ? Colors.blue.shade800
+                                                : (client.isOnline
+                                                    ? Colors.teal.shade800
+                                                    : Colors.grey.shade700),
                                           ),
                                         ),
                                       ),
@@ -1091,7 +1204,7 @@ class _HomePageState extends State<HomePage> {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    'IPv4: ${client.ip}  •  MAC: ${client.macDisplay}  •  Hostname: ${client.hostname}',
+                                    'IPv4: ${client.ip}  •  MAC: ${client.macDisplay}  •  ${isWebClient ? "Active in Web Portal (No app required)" : "Hostname: ${client.hostname}"}',
                                     style: TextStyle(
                                       fontSize: 12,
                                       fontFamily: 'monospace',
@@ -1101,27 +1214,24 @@ class _HomePageState extends State<HomePage> {
                                 ],
                               ),
                             ),
-                            // Communication status
-                            Tooltip(
-                              message: 'Messaging requires a device running Hotspot Guardian receiver',
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: scheme.surfaceContainerHighest.withOpacity(0.5),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(color: scheme.outlineVariant.withOpacity(0.3)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.block, size: 12, color: scheme.onSurfaceVariant),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Messaging Unsupported',
-                                      style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-                                    ),
-                                  ],
-                                ),
+                            // Live Communication Actions
+                            FilledButton.tonalIcon(
+                              onPressed: () => _showSendPortalMessageDialog(
+                                context,
+                                client.ip,
+                                displayName,
+                              ),
+                              icon: Icon(
+                                isWebClient ? Icons.forum_outlined : Icons.chat_bubble_outline,
+                                size: 14,
+                              ),
+                              label: Text(
+                                isWebClient ? 'Portal Chat' : 'Send Message',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                minimumSize: Size.zero,
                               ),
                             ),
                           ],
@@ -1131,12 +1241,16 @@ class _HomePageState extends State<HomePage> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHighest.withOpacity(0.25),
+                            color: scheme.surfaceContainerHighest.withValues(alpha: 0.25),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.data_usage, size: 13, color: scheme.onSurfaceVariant),
+                              Icon(
+                                Icons.data_usage,
+                                size: 13,
+                                color: isWebClient ? Colors.blue : scheme.onSurfaceVariant,
+                              ),
                               const SizedBox(width: 6),
                               Expanded(
                                 child: Text(
@@ -1163,6 +1277,7 @@ class _HomePageState extends State<HomePage> {
                   );
                 },
               ),
+            ],
           ],
         ),
       ),

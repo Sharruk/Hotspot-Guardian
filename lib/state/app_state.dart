@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -464,6 +465,26 @@ class AppState extends ChangeNotifier {
 
   /// Local listening port (may differ from settings if it was in use).
   int? get port => _receiver?.port;
+
+  /// The active receiver server instance.
+  Receiver? get receiver => _receiver;
+
+  /// Sends a text message to Web Portal clients (or a specific IP) over the local portal chat.
+  void sendPortalMessage({required String text, String? targetIp}) {
+    final rec = _receiver;
+    if (rec == null) return;
+    rec.broadcastPortalMessage(text: text, targetIp: targetIp);
+    EventLog.instance.add(
+      'Sent message to ${targetIp ?? "Web Portal"}: "$text"',
+      category: 'MESSAGE',
+    );
+    ObservedTraffic.instance.recordOutgoingTransfer(
+      peerIp: targetIp ?? 'WebPortal',
+      bytes: utf8.encode(text).length,
+      isMessage: true,
+    );
+    notifyListeners();
+  }
 
   /// Retries starting the receiver after a failed boot (e.g. every candidate
   /// port was taken, or the OS refused the bind while the network stack was
